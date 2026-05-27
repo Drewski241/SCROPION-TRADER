@@ -565,7 +565,7 @@ Please log in with the fingerprint: [/][blue]$($this.fingerprint)[/]
                 return
             } else {
                 if((Read-SageOffer -offer $dexie_offer.offer) -eq "active"){
-                    $accept = Complete-SageOffer -offer $dexie_offer.offer
+                    Complete-SageOffer -offer $dexie_offer.offer
                     Invoke-SQLDataUpdate -bot_id ($this.id) -offer_id ($dexie_offer.id) -profit_x 0 -profit_y ($check.profit) -dx ($check.bot.dx) -dy ($check.bot.dy)
                     $this.state = 3
                     $this.save()
