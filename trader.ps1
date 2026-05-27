@@ -37,8 +37,6 @@ function Get-TTDatabase{
 }
 
 
-
-
 class SilentBot {
     [string]$id
     [string]$fingerprint
@@ -449,33 +447,12 @@ Please log in with the fingerprint: [/][blue]$($this.fingerprint)[/]
         $_yr = $this.yr
         $_y = $this.liquidity_squared / ($newxr + $_xv)
         $newyr = [math]::round($_y - $_yv,3)
-        
-        if($this.x_is_spread_token){
-            $fee_token = $this.token_x
-            $dy = $newyr - $_yr
-            $_fee = [math]::Abs([math]::Round($amount * ($this.spread_percentage / 2),12))
-            if($amount -lt 0){
-                $dx = $amount + $_fee
-            } else {
-                $dx = $amount + $_fee
-            }
-        } else {
-            $fee_token = $this.token_y
-            $dx = $newxr - $_xr
-            $_fee = [math]::Abs([math]::Round(($newyr - $_yr) * ($this.spread_percentage / 2),12))
-            if($amount -lt 0){
-                $dy = $newyr - $_yr + $_fee
-            } else {
-                $dy = $newyr - $_yr + $_fee
-            }
-            
-        }
+        $dy = $newyr - $_yr
+        $dx = $amount
 
 
         $trade = [ordered]@{
             'price' = [math]::Round(([math]::Abs($dy) / [math]::Abs($dx)),3)
-            'fee_token' = $fee_token
-            'fee' = ([math]::Abs($_fee))
             'newyr' = $newyr
             'newxr' = $newxr
             'amount' = $amount
@@ -497,33 +474,11 @@ Please log in with the fingerprint: [/][blue]$($this.fingerprint)[/]
         $_xr = $this.xr
         $_x = $this.liquidity_squared / ($newyr + $_yv)
         $newxr = [math]::round($_x - $_xv,12)
-        if(-not $this.x_is_spread_token){
-            
-            $fee_token = $this.token_y.ticker
-            $dx = $newxr - $_xr
-            $_fee = [math]::Abs([math]::Round($dx * ($this.spread_percentage / 2),3))
-            if($amount -lt 0){
-                $dy = $amount + $_fee
-            } else {
-                $dy = $amount + $_fee
-            }
-        } else {
-            $fee_token = $this.token_x.ticker
-            $dy = $newyr - $_yr
-            $_fee = [math]::Abs([math]::Round(($newxr - $_xr) * ($this.spread_percentage / 2),3))
-            if($amount -lt 0){
-                $dx = $newxr - $_xr - $_fee
-            } else {
-                $dx = $newxr - $_xr - $_fee
-            }
-            
-        }
-
+        $dx = $newxr - $_xr
+        $dy = $amount
 
         $trade = [ordered]@{
             'price' = [math]::Round(([math]::Abs($dy) / [math]::Abs($dx)),3)
-            'fee_token' = $fee_token
-            'fee' = ([math]::Abs($_fee))
             'newyr' = $newyr
             'newxr' = $newxr
             'amount' = $amount
@@ -536,4 +491,157 @@ Please log in with the fingerprint: [/][blue]$($this.fingerprint)[/]
         return $trade        
     }
 
+    [pscustomobject]dexieOffersFromX([decimal]$amount){
+        
+        if($amount -lt 0){
+            $response = Get-DexieOffers -requested ($this.token_x) -offered ($this.token_y_id)
+            return ($response.offers | Where-Object {$_.requested.amount -lt [math]::abs($amount)})
+        } else {
+            $response = Get-DexieOffers -requested ($this.token_y_id) -offered ($this.token_x)
+            return ($response.offers | Where-Object {$_.offered.amount -lt $amount})
+        }
+
+    }
+
+    [pscustomobject]tibetQuoteFromX([decimal]$amount){
+        if($amount -lt 0){
+            $response = Get-TibetQuote -pair_id $this.pair_id -amount_in ( [math]::Abs($amount) | ConvertTo-XchMojo) -xch_is_input
+        } else {
+            $response = Get-TibetQuote -pair_id $this.pair_id -amount_out ( $amount | ConvertTo-XchMojo)
+        }
+        return $response
+    }
+
+    [pscustomobject]checkDexieOfferAgainstBot($dexie_offer){
+        
+        if($dexie_offer.offered[0].id -eq $this.token_x){
+            $bots_want = $this.Adjust_X_Amount($dexie_offer.offered[0].amount)
+            $response = [pscustomobject]@{
+                should_accept = ((($dexie_offer.requested[0].amount)-$bots_want.dy) -gt 0)
+                profit = (($dexie_offer.requested[0].amount)-$bots_want.dy)
+                dexie = [pscustomobject]@{
+                    dx = ($dexie_offer.offered[0].amount)
+                    dy = (-($dexie_offer.requested[0].amount))
+                }
+                bot = $bots_want
+            }
+            return $response
+        }
+        if($dexie_offer.offered[0].id -eq $this.token_y_id){
+            $bots_want = $this.Adjust_X_Amount(-($dexie_offer.requested[0].amount))
+            $response = [pscustomobject]@{
+                should_accept = ((($dexie_offer.offered[0].amount)-$bots_want.dy) -gt 0)
+                profit = (($dexie_offer.offered[0].amount)-$bots_want.dy)
+                dexie = [pscustomobject]@{
+                    dx = (-($dexie_offer.requested[0].amount))
+                    dy = ($dexie_offer.offered[0].amount)
+                }
+                bot = $bots_want
+            }
+
+            return $response
+        }
+        return [pscustomobject]@{
+            'success'= $false
+        }
+    
+    }
+
+    [void]TakeDexieOffer($dexie_offer){
+        if($this.state -ne 1){
+            Write-Error "System Not ready"
+            return
+        }
+
+        $check = $this.checkDexieOfferAgainstBot($dexie_offer)
+        if(-Not $check.should_accept){
+            Write-Error "This offer should not be accepted."
+            return
+        }
+
+        if($check.bot.dx -lt 0){
+            if(($this.xr + $check.bot.dx) -lt 0){
+                Write-Error "Not enough XCH to attempt"
+                return
+            } else {
+                if((Read-SageOffer -offer $dexie_offer.offer) -eq "active"){
+                    $accept = Complete-SageOffer -offer $dexie_offer.offer
+                    Invoke-SQLDataUpdate -bot_id ($this.id) -offer_id ($dexie_offer.id) -profit_x 0 -profit_y ($check.profit) -dx ($check.bot.dx) -dy ($check.bot.dy)
+                    $this.state = 3
+                    $this.save()
+                }
+            }
+
+        }
+        if($check.bot.dy -lt 0){
+            if(($this.yr + $check.bot.yx) -lt 0){
+                Write-Error "Not enough XCH to attempt"
+                return
+            } else {
+                if((Read-SageOffer -offer $dexie_offer.offer) -eq "active"){
+                    $accept = Complete-SageOffer -offer $dexie_offer.offer
+                    Invoke-SQLDataUpdate -bot_id ($this.id) -offer_id ($dexie_offer.id) -profit_x 0 -profit_y ($check.profit) -dx ($check.bot.dx) -dy ($check.bot.dy)
+                    $this.state = 3
+                    $this.save()
+                }
+                
+            }
+        }
+
+    }
+
+}
+
+function Invoke-SQLDataUpdate {
+    param(
+        [Parameter(Mandatory = $true)]
+        $bot_id,
+
+        [Parameter(Mandatory = $true)]
+        $offer_id,
+
+        [Parameter(Mandatory = $true)]
+        $profit_x,
+
+        [Parameter(Mandatory = $true)]
+        $profit_y,
+
+        [Parameter(Mandatory = $true)]
+        $dx,
+
+        [Parameter(Mandatory = $true)]
+        $dy
+    )
+
+    $parameters = @{
+        bot_id = $bot_id
+        offer_id = $offer_id
+        profit_x = $profit_x
+        profit_y = $profit_y
+        dx = $dx
+        dy = $dy
+        status = "pending"
+        created_at = (Get-Date)
+        updated_at = (Get-Date)
+    }
+
+    $query = @"
+INSERT INTO trades (bot_id, offer_id, profit_x, profit_y, dx, dy, status, created_at, updated_at)
+VALUES (@bot_id, @offer_id, @profit_x, @profit_y, @dx, @dy, @status, @created_at, @updated_at);
+"@
+
+    Invoke-SqliteQuery -DataSource (Get-TTDatabase) -Query $query -SqlParameters $parameters
+}
+
+function Invoke-SQLDataUpate {
+    param(
+        $bot_id,
+        $offer_id,
+        $profit_x,
+        $profit_y,
+        $dx,
+        $dy
+    )
+
+    Invoke-SQLDataUpdate -bot_id $bot_id -offer_id $offer_id -profit_x $profit_x -profit_y $profit_y -dx $dx -dy $dy
 }

@@ -38,18 +38,12 @@ $bot_state = @"
 $trades_query = @"
 CREATE TABLE trades (
     id INTEGER PRIMARY KEY,
-    bot_id INTEGER
+    bot_id INTEGER,
     offer_id TEXT,
-    token_x NUMERIC,
-    token_y NUMERIC,
-    required_profit_x NUMERIc,
-    required_profit_y NUMERIC,
     profit_x NUMERIC,
     profit_y NUMERIC,
-    xr NUMERIC,
-    xv NUMERIC,
-    yr NUMERIC,
-    yv NUMERIC,
+    dx NUMERIC,
+    dy NUMERIC,
     status TEXT,
     created_at TEXT,
     updated_at TEXT
