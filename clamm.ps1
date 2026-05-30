@@ -702,7 +702,7 @@ class TraderBot {
         } else {
             start-sleep 60
             $trackedOffer = Get-SageOffer -offer_id $offer.offer_id
-            if($trackedOffer -eq "completed"){
+            if($trackedOffer.status -eq "completed"){
                 $this.CommitTrade($checked_quote)
                 return $true
             }
@@ -728,8 +728,18 @@ class TraderBot {
         $dy = (($measure | Where-Object {$_.Property -eq "dy"}).sum)
         $xprofit = (($measure | Where-Object {$_.Property -eq "xprofit"}).sum)
         $yprofit = (($measure | Where-Object {$_.Property -eq "yprofit"}).sum)
-        $xPercent = $xprofit / $dx
-        $yPercent = $yprofit / $dy
+        if($dx -ne 0){
+            $xPercent = $xprofit / $dx
+        } else {
+            $xPercent = 0
+        }
+        if($dy -ne 0){
+            $yPercent = $yprofit / $dy
+        } else {
+            $yPercent = 0
+        }
+        
+        
         return [pscustomobject]@{
             dx = $dx
             xProfit = $xprofit
@@ -754,14 +764,14 @@ class TraderBot {
             xTradesMatchXR = ($calculatedX -eq $this.xr)
             yTradesMatchYR = ($calculatedY -eq $this.yr)
             exactBallanceX = ($walletX -eq $totalX)
-            xactBallanceY = ($walletY -eq $totalY)
+            exactBallanceY = ($walletY -eq $totalY)
             xBalanceOk = ($walletX -ge $this.xr)
             yBalanceOk = ($walletY -ge $this.yr)
         }
     }
 
     [bool]Handle(){
-        
+
         $dexieX = $this.GetDexieFromX()
         $dexieXcheck = $this.CheckOffer($dexieX.offer)
         $tibetXCheck = $this.CheckTibetQuote($this.GetTibetQuoteFromX($dexieXcheck.TibetX))
