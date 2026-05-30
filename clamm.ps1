@@ -148,6 +148,7 @@ class TraderBot {
         $startingAmount = [TraderBot]::Prompt_Positive_Decimal("Enter starting amount")
         $bot.Starting_Token_Amount($startingAmount)
         $bot.id = [TraderBot]::Prompt_Name()
+        $bot.save()
         return $bot
 
         throw "Unexpected prompt flow while building TraderBot."
@@ -371,7 +372,7 @@ class TraderBot {
         }
     }
 
-    [string]CheckOffer($offer_string){
+    [hashtable]CheckOffer($offer_string){
         
         $read = Read-SageOffer -offer $offer_string
         if($read.status -eq "expired"){
@@ -381,13 +382,23 @@ class TraderBot {
             if($read.offer.maker[0].asset.asset_id -eq $this.token_y_id -AND $null -eq $read.offer.taker[0].asset.asset_id){
                 $requested_xch = $read.offer.taker[0].amount | ConvertFrom-XchMojo
                 $offered_y = $read.offer.maker[0].amount | ConvertFrom-CatMojo
-
                 $formula_says = $this.Adjust_X_Amount(-$requested_xch)
                 $yprofit = ($offered_y - $formula_says.dy)
                 if($yprofit -gt 0){
-                    Return "You should take this for a profit of $($yprofit) $($this.token_y)"
+                    Return @{
+                        isProfitable = $true
+                        dx = $formula_says.dx
+                        dy = $formula_says.dy
+                        xProfit = 0
+                        yProfit = $yprofit
+                        offer = $offer_string
+                        TibetX = ([Math]::Abs($formula_says.dx))
+                    }
                 } else {
-                    Return "The trade is unprofitable."
+                    Return @{
+                        isProfitable = $false
+                        TibetX = ([Math]::Abs($formula_says.dx))
+                    }
                 }
             }
             if($null -eq ($read.offer.maker[0].asset.asset_id) -AND ($read.offer.taker[0].asset.asset_id) -eq $this.token_y_id){
@@ -397,22 +408,34 @@ class TraderBot {
                 $formula_says = $this.Adjust_Y_Amount(-$requested_y)
                 $xprofit = ($offered_xch - $formula_says.dx)
                 if($xprofit -gt 0) {
-                    Return "You should take this for a profit of $($xprofit) XCH"
+                    Return @{
+                        isProfitable = $true
+                        dx = $formula_says.dx
+                        dy = $formula_says.dy
+                        xProfit = $xprofit
+                        yProfit = 0
+                        offer = $offer_string
+                        TibetY = ([Math]::Abs($formula_says.dy))
+                    }
                 } else {
-                    Return "This is not a favorable trade. "
+                    Return @{
+                        isProfitable = $false
+                        TibetY = ([Math]::Abs($formula_says.dy))
+                    }
                 }
-
             }
         }
-        Return "hi"
-        
+        Return @{isProfitable = $false}
     }
 
-    [void]CommitTrade([decimal]$dx, [decimal]$dy, [decimal]$xProfit, [decimal]$yProfit){
+    [void]CommitTrade([hashtable]$checked_offer){
         if([string]::IsNullOrWhiteSpace($this.id)){
             throw "Bot id must be set before committing a trade. Call SaveToJson first or assign an id."
         }
-
+        $dx = $checked_offer.dx
+        $dy = $checked_offer.dy
+        $xProfit = $checked_offer.xProfit
+        $yProfit = $checked_offer.yProfit
         $newXTotal = $this.xr + $dx + $this.xv
         $newYTotal = $this.yr + $dy + $this.yv
         $actualProduct = $newXTotal * $newYTotal
@@ -504,22 +527,278 @@ class TraderBot {
         return $trade        
     }
 
-    static [bool]TakeOffer($offer_string){
+    [array]GetDexieFromX(){
+        $offer = Get-DexieOffers -offered $($this.token_y) -requested "xch" -page_size 1
+        return $offer.offers
+    }
 
-        $read = read-sageoffer -$offer_string
+    [array]GetDexieFromY(){
+        $offer = Get-DexieOffers -requested $($this.token_y) -offered "xch" -page_size 1
+        return $offer.offers
+    }
+
+
+
+    [void]HandleDexieFromX(){
+        $dexX = $this.GetDexieFromX()
+        $this.HandleOffer($dexX.offer)
+    }
+
+    [void]HandleDexieFromY(){
+        $dexY = $this.GetDexieFromY()
+        $this.HandleOffer($dexY.offer)
+    }
+
+    [array]Trades(){
+        $resolvedDirectory = [TraderBot]::Resolve_Bot_Directory("~/.bots")
+        $csvPath = [System.IO.Path]::Combine($resolvedDirectory, "completed_trades.csv")
+        $trades = Import-Csv -Path $csvPath | Where-Object {$_.bot_name -eq $this.id}
+        return $trades
+    }
+
+    [bool]TakeOffer($checked_offer){
+        $pretrade_x = (Get-SageSyncStatus).selectable_balance
+        $pretrade_y = ((get-sagecats).cats | Where-Object {$_.asset_id -eq $($this.token_y_id)}).selectable_balance
+        $read = read-sageoffer -offer $checked_offer.offer
         if($read.status -eq "active"){
-            $take = Complete-SageOffer -offer $offer_string
-            start-sleep 2
-            $count = Get-SagePendingTransactions
-            while($count -gt 0){
-                start-sleep 2
-                Write-Host "waiting for transactions to process"
-                $count = Get-SagePendingTransactions
+            $take = Complete-SageOffer -offer $checked_offer.offer
+            
+            if(-not $take){
+                throw "Offer coult not be taken"
             }
+            start-sleep 2
+            $count = (Get-SagePendingTransactions).count
+            while($count -gt 0){
+                start-sleep 10
+                Write-Host "waiting for transactions to process"
+                $count = (Get-SagePendingTransactions).count
+            }
+            $posttrade_x = (Get-SageSyncStatus).selectable_balance
+            $posttrade_y = ((get-sagecats).cats | Where-Object {$_.asset_id -eq $($this.token_y_id)}).selectable_balance
+            $trade_dx = ($posttrade_x - $pretrade_x) | ConvertFrom-XchMojo
+            $trade_dy = ($posttrade_y - $pretrade_y) | ConvertFrom-CatMojo
+            if($trade_dx -eq ($checked_offer.dx + $checked_offer.xprofit) -and $trade_dy -eq ($checked_offer.dy + $checked_offer.yProfit)){
+                return $true
+            }
+        }
+        return $false
+    }
 
+    [void]HandleOffer($offer_string){
+        
+        # Check for profitability
+        $checked_offer = $this.CheckOffer($offer_string)
+        
+        if($checked_offer.isProfitable){
 
+            # Take profitable offer
+            $take_offer = $this.TakeOffer($checked_offer)
+            
+            
+            if($take_offer){
+                # Record Transaction
+                $this.CommitTrade($checked_offer)
+            }
+        }
+    }
+
+    [bool]HandleTibetFromX($amount){
+        $quote = $this.GetTibetQuoteFromX($amount)
+        $check = $this.CheckTibetQuote($quote)
+        $attempt = $this.AttemptTibetOffer($check)
+        return $attempt
+    }
+
+    [bool]HandleTibetFromY($amount){
+        $quote = $this.GetTibetQuoteFromY($amount)
+        $check = $this.CheckTibetQuote($quote)
+        $attempt = $this.AttemptTibetOffer($check)
+        return $attempt
+    }
+
+    [pscustomobject]GetTibetQuoteFromX($amount){
+        $quote = Get-TibetQuote -pair_id $this.pair_id -amount_in ($amount | ConvertTo-XchMojo) -xch_is_input
+        return $quote
+    }
+
+    [pscustomobject]GetTibetQuoteFromY($amount){
+        $quote = Get-TibetQuote -pair_id $this.pair_id -amount_in ($amount | ConvertTo-CatMojo)
+        return $quote
+    }
+
+    [hashtable]CheckTibetQuote($quote){
+        if($quote.amount_in -lt $quote.amount_out){
+            # wants cat
+            $requested_y = $quote.amount_in | ConvertFrom-CatMojo
+            $offered_xch = $quote.amount_out | ConvertFrom-XchMojo
+            $formula_says = $this.Adjust_Y_Amount(-($requested_y))
+            $xProfit = $offered_xch - ($formula_says.dx)
+            if($xProfit -gt 0){
+                return @{
+                    isProfitable = $true
+                    dx = $formula_says.dx
+                    dy = $formula_says.dy
+                    xProfit = $xprofit
+                    yProfit = 0 
+                    quote = $quote
+                }
+            } 
+
+        } else {
+            # wants XCH
+            $requested_xch = $quote.amount_in | ConvertFrom-XchMojo
+            $offered_y = $quote.amount_out | ConvertFrom-catMojo
+            $formula_says = $this.Adjust_X_Amount(-($requested_xch))
+            $yProfit = $offered_y - ($formula_says.dy)
+            if($yProfit -gt 0){
+                return @{
+                    isProfitable = $true
+                    dx = $formula_says.dx
+                    dy = $formula_says.dy
+                    xProfit = 0
+                    yProfit = $yProfit  
+                    quote = $quote 
+                }
+            } 
+        }
+        return @{isProfitable=$false}
+    }
+
+    [bool]AttemptTibetOffer($checked_quote){
+        if(-Not $checked_quote.isProfitable){
+            Write-Host "Tibet offer not profitable"
+            return $false
+        }
+        $offered_amount = $checked_quote.quote.amount_in 
+        $requested_amount = $checked_quote.quote.amount_out
+        $genOffer = Build-SageOffer
+        if($offered_amount -gt $requested_amount){
+            # Wants XCH
+            $genOffer.offerXch($offered_amount)
+            $genOffer.requestCat(($this.token_y_id),$requested_amount)
+        } elseif($requested_amount -gt $offered_amount) {
+            # Wants TokenY
+            $genOffer.offerCat(($this.token_y_id),$offered_amount)
+            $genOffer.requestXch($requested_amount)
+        } else {
+            Throw "could not determin offer."
+        }
+        $genOffer.setMinutesUntilExpires(5)
+        $genOffer.createoffer()
+        $offer = $genOffer.offer_data
+        $submit = Submit-TibetOffer -pair_id $this.pair_id -offer $offer.offer -action SWAP
+        if(-NOT $submit.success){
+            Remove-SageOffer -offer_id $offer.offer_id
+            return $false
+        }
+        $trackedOffer = Get-SageOffer -offer_id $offer.offer_id
+        while($trackedOffer.status -eq "active"){
+            Start-Sleep 10
+            $trackedOffer = Get-SageOffer -offer_id $offer.offer_id
+        }
+        if($trackedOffer.status -eq "completed"){
+            $this.CommitTrade($checked_quote)
+            return $true
+        } else {
+            start-sleep 60
+            $trackedOffer = Get-SageOffer -offer_id $offer.offer_id
+            if($trackedOffer -eq "completed"){
+                $this.CommitTrade($checked_quote)
+                return $true
+            }
+        }
+        return $false
+    }
+
+    [hashtable]AvailableProfit(){
+        $trades = $this.Trades()
+        $measure = $trades | Measure-Object -sum xprofit, yprofit
+        $xprofit = (($measure | Where-Object {$_.Property -eq "xprofit"}).sum)
+        $yprofit = (($measure | Where-Object {$_.Property -eq "yprofit"}).sum)
+        return @{
+            xProfit = $xprofit
+            yProfit = $yprofit
+        }
+    }
+
+    [pscustomobject]ProfitReport(){
+        $trades = $this.Trades() | Where-Object { -not ( $_.xprofit -lt 0 -or $_.yprofit -lt 0 )}
+        $measure = $trades | Measure-Object -sum dx, dy, xprofit, yprofit
+        $dx = (($measure | Where-Object {$_.Property -eq "dx"}).sum)
+        $dy = (($measure | Where-Object {$_.Property -eq "dy"}).sum)
+        $xprofit = (($measure | Where-Object {$_.Property -eq "xprofit"}).sum)
+        $yprofit = (($measure | Where-Object {$_.Property -eq "yprofit"}).sum)
+        $xPercent = $xprofit / $dx
+        $yPercent = $yprofit / $dy
+        return [pscustomobject]@{
+            dx = $dx
+            xProfit = $xprofit
+            xPercent = $xPercent
+            dy = $dy
+            yProfit = $yprofit
+            yPercent = $yPercent
+        }
+    }
+
+    [hashtable]AuditReport(){
+        $pr = $this.ProfitReport()
+        $calculatedX = $this.starting_x_amount + $pr.dx
+        $CalculatedY = $this.starting_y_amount + $pr.dy
+        $availableProfit = $this.AvailableProfit()
+        $totalX = $this.xr + $availableProfit.xprofit
+        $totalY = $this.yr + $availableProfit.yprofit
+        $walletX = (Get-SageSyncStatus).selectable_balance | ConvertFrom-XchMojo
+        $walletY = (get-sagecat -asset_id $this.token_y_id).token.balance | ConvertFrom-CatMojo
+
+        return @{
+            xTradesMatchXR = ($calculatedX -eq $this.xr)
+            yTradesMatchYR = ($calculatedY -eq $this.yr)
+            exactBallanceX = ($walletX -eq $totalX)
+            xactBallanceY = ($walletY -eq $totalY)
+            xBalanceOk = ($walletX -ge $this.xr)
+            yBalanceOk = ($walletY -ge $this.yr)
+        }
+    }
+
+    [bool]Handle(){
+        
+        $dexieX = $this.GetDexieFromX()
+        $dexieXcheck = $this.CheckOffer($dexieX.offer)
+        $tibetXCheck = $this.CheckTibetQuote($this.GetTibetQuoteFromX($dexieXcheck.TibetX))
+        if($dexieXcheck.isProfitable){
+            # check if tibet is profitable
+            if($tibetXCheck.isProfitable){
+                # both profiable, pick the best one.
+                if($dexieXcheck.yProfit -gt $tibetXCheck.yProfit){
+                    # x better
+                    $this.HandleDexieFromX()
+                    return $true
+                } else {
+                    $this.AttemptTibetOffer($tibetXCheck)
+                    return $true
+                }
+            } 
+            $this.HandleDexieFromX()
+            return $true
         }
 
+        $dexieY = $this.GetDexieFromY()
+        $dexieYcheck = $this.checkoffer($dexieY.offer)
+        $tibetYcheck = $this.CheckTibetQuote($this.GetTibetQuoteFromY($dexieYcheck.TibetY))
+        if($dexieYcheck.isProfitable){
+            if($tibetYcheck.isProfitable){
+                if($dexieYcheck.xProfit -gt $tibetYcheck.xProfit){
+                    $this.HandleDexieFromY()
+                    return $true
+                } else {
+                    $this.AttemptTibetOffer($tibetYcheck)
+                    return $true
+                }
+            }
+            $this.HandleDexieFromY()
+            return $true
+        }
+        return $false
     }
 }
 
