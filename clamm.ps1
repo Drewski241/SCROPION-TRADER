@@ -459,7 +459,7 @@ class TraderBot {
         $row | Export-Csv -Path $csvPath -Append -NoTypeInformation
 
         $this.xr = [math]::Round($this.xr + $dx, 12)
-        $this.yr = [math]::Round($this.yr + $dy, 3)
+        $this.yr = [math]::Round($this.liquidity_squared / ($this.xr + $this.xv) - $this.yv, 6)
         $this.SaveToJson()
     }
 
@@ -471,9 +471,9 @@ class TraderBot {
         }
         $_xv = $this.xv
         $_yv = $this.yv
-        $_yr = $this.yr
+        $_yr = [math]::Round($this.liquidity_squared / ($_xr + $_xv) - $_yv, 6)
         $_y = $this.liquidity_squared / ($newxr + $_xv)
-        $newyr = [math]::round($_y - $_yv,3)
+        $newyr = [math]::round($_y - $_yv,6)
         if($newyr -lt 0){
             throw "Insufficient yr reserve for this x adjustment. Available yr: $_yr"
         }
@@ -504,7 +504,7 @@ class TraderBot {
         }
         $_xv = $this.xv
         $_yv = $this.yv
-        $_xr = $this.xr
+        $_xr = [math]::Round($this.liquidity_squared / ($_yr + $_yv) - $_xv, 12)
         $_x = $this.liquidity_squared / ($newyr + $_yv)
         $newxr = [math]::round($_x - $_xv,12)
         if($newxr -lt 0){
