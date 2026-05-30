@@ -432,16 +432,55 @@ class TraderBot {
         if([string]::IsNullOrWhiteSpace($this.id)){
             throw "Bot id must be set before committing a trade. Call SaveToJson first or assign an id."
         }
-        $dx = $checked_offer.dx
-        $dy = $checked_offer.dy
-        $xProfit = $checked_offer.xProfit
-        $yProfit = $checked_offer.yProfit
-        $newXTotal = $this.xr + $dx + $this.xv
-        $newYTotal = $this.yr + $dy + $this.yv
+        $requiredKeys = @('dx', 'dy', 'xProfit', 'yProfit')
+        foreach($key in $requiredKeys){
+            if(-not $checked_offer.ContainsKey($key)){
+                throw "CommitTrade rejected for bot $($this.id): checked_offer is missing required key '$key'."
+            }
+        }
+
+        try{
+            $dx = [decimal]$checked_offer.dx
+            $dy = [decimal]$checked_offer.dy
+            $xProfit = [decimal]$checked_offer.xProfit
+            $yProfit = [decimal]$checked_offer.yProfit
+        } catch {
+            throw "CommitTrade rejected for bot $($this.id): dx, dy, xProfit, and yProfit must be numeric."
+        }
+
+        if($xProfit -lt 0 -or $yProfit -lt 0){
+            throw "CommitTrade rejected for bot $($this.id): profits must be non-negative. xProfit=$xProfit yProfit=$yProfit"
+        }
+        if($dx -eq 0 -and $dy -eq 0){
+            throw "CommitTrade rejected for bot $($this.id): trade deltas cannot both be zero."
+        }
+
+        $oldYrDerived = [math]::Round($this.liquidity_squared / ($this.xr + $this.xv) - $this.yv, 6)
+        $newxr = [math]::Round($this.xr + $dx, 12)
+        if($newxr -lt 0){
+            throw "CommitTrade rejected for bot $($this.id): new xr would be negative. xr=$($this.xr) dx=$dx newxr=$newxr"
+        }
+
+        $newyr = [math]::Round($this.liquidity_squared / ($newxr + $this.xv) - $this.yv, 6)
+        if($newyr -lt 0){
+            throw "CommitTrade rejected for bot $($this.id): new yr would be negative. yr=$($this.yr) dy=$dy newyr=$newyr"
+        }
+
+        $expectedDy = [math]::Round($newyr - $oldYrDerived, 6)
+        $dyDelta = [math]::Abs($expectedDy - $dy)
+        $dyTolerance = [decimal]0.001
+        if($dyDelta -gt $dyTolerance){
+            throw "CommitTrade rejected for bot $($this.id): dy does not match invariant-derived delta. dx=$dx dy=$dy expectedDy=$expectedDy tolerance=$dyTolerance"
+        }
+
+        $newXTotal = $newxr + $this.xv
+        $newYTotal = $oldYrDerived + $dy + $this.yv
         $actualProduct = $newXTotal * $newYTotal
-        $tolerance = [math]::Abs($newXTotal) * 0.0005
+        $relativeTolerance = [decimal]([math]::Abs([double]$this.liquidity_squared) * 0.000001)
+        $absoluteTolerance = [decimal]0.01
+        $tolerance = if($relativeTolerance -gt $absoluteTolerance){ $relativeTolerance } else { $absoluteTolerance }
         if([math]::Abs($actualProduct - $this.liquidity_squared) -gt $tolerance){
-            throw "CommitTrade rejected: dx=$dx dy=$dy violates the liquidity invariant. Expected product ~$($this.liquidity_squared), got $actualProduct (tolerance $tolerance)."
+            throw "CommitTrade rejected for bot $($this.id): invariant mismatch. dx=$dx dy=$dy expected=$($this.liquidity_squared) actual=$actualProduct tolerance=$tolerance"
         }
 
         $resolvedDirectory = [TraderBot]::Resolve_Bot_Directory("~/.bots")
@@ -458,8 +497,8 @@ class TraderBot {
 
         $row | Export-Csv -Path $csvPath -Append -NoTypeInformation
 
-        $this.xr = [math]::Round($this.xr + $dx, 12)
-        $this.yr = [math]::Round($this.liquidity_squared / ($this.xr + $this.xv) - $this.yv, 6)
+        $this.xr = $newxr
+        $this.yr = $newyr
         $this.SaveToJson()
     }
 
