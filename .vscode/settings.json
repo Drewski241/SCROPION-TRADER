@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^pwsh -NoProfile -Command '\\$null = \\[System\\.Management\\.Automation\\.Language\\.Parser\\]::ParseFile\\(\"clamm\\.ps1\", \\[ref\\]\\$null, \\[ref\\]\\$null\\); \\$null = \\[System\\.Management\\.Automation\\.Language\\.Parser\\]::ParseFile\\(\"trader\\.ps1\", \\[ref\\]\\$null, \\[ref\\]\\$null\\); \"Parse OK\"'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
