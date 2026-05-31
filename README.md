@@ -47,3 +47,12 @@ Give your bot a name: <name>
 > If your starting token is Y then you want to set the max price to the current price and the min price to how low you want to buy to.
 > At the min price, all of your Tokens will be in X, at the max price all your tokens will be in Y.
 > If you want to buy and sell, you need two bots to run.
+
+
+## Run your bot
+
+```powershell
+$bot = Import-TraderBot -botName <name>
+$bot.longrun()
+```
+
