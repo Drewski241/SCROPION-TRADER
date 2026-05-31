@@ -868,8 +868,12 @@ class TraderBot {
 
     longrun(){
         while($true){
+            Get-Date
+            Write-Host "Checking Dexie for offers from XCH"
             $this.HandleDexieFromX()
+            Write-Host "Checking Dexie for offers from $($this.token_y)"
             $this.HandleDexieFromY()
+            Write-Host "Waiting 30 seconds"
             start-sleep 30
         }
     }
