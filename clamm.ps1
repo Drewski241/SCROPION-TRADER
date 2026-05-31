@@ -727,9 +727,12 @@ class TraderBot {
         $offer = $genOffer.offer_data
         $submit = Submit-TibetOffer -pair_id $this.pair_id -offer $offer.offer -action SWAP
         if(-NOT $submit.success){
+            Write-Host "Failed to submit offer to tibetswap"
             Remove-SageOffer -offer_id $offer.offer_id
             return $false
         }
+        Write-Host "offer submitted to tibetswap, waiting 5 sec to test"
+        start-sleep 5
         $trackedOffer = Get-SageOffer -offer_id $offer.offer_id
         while($trackedOffer.status -eq "active"){
             Start-Sleep 10
