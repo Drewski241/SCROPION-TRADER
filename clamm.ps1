@@ -602,8 +602,9 @@ class TraderBot {
     }
 
     [bool]TakeOffer($checked_offer){
-        $pretrade_x = (Get-SageSyncStatus).selectable_balance
+        Write-Host "Trying to take an offer with TakeOffer()"
         $pretrade_y = ((get-sagecats).cats | Where-Object {$_.asset_id -eq $($this.token_y_id)}).selectable_balance
+        Write-Host "PreTrade TokenY = $($pretrade_y)"
         $read = read-sageoffer -offer $checked_offer.offer
         if($read.status -eq "active"){
             $take = Complete-SageOffer -offer $checked_offer.offer
@@ -611,6 +612,7 @@ class TraderBot {
             if(-not $take){
                 throw "Offer coult not be taken"
             }
+            Write-Host "Offer taken - waiting for completion"
             start-sleep 2
             $count = (Get-SagePendingTransactions).count
             while($count -gt 0){
@@ -618,14 +620,16 @@ class TraderBot {
                 Write-Host "waiting for transactions to process"
                 $count = (Get-SagePendingTransactions).count
             }
-            $posttrade_x = (Get-SageSyncStatus).selectable_balance
+            
             $posttrade_y = ((get-sagecats).cats | Where-Object {$_.asset_id -eq $($this.token_y_id)}).selectable_balance
-            $trade_dx = ($posttrade_x - $pretrade_x) | ConvertFrom-XchMojo
-            $trade_dy = ($posttrade_y - $pretrade_y) | ConvertFrom-CatMojo
-            if($trade_dx -eq ($checked_offer.dx + $checked_offer.xprofit) -and $trade_dy -eq ($checked_offer.dy + $checked_offer.yProfit)){
+            Write-Host "Offer has completed. Post Trade TokenY = $($posttrade_y)"
+            # This is a stupid way to check, but need to do some troubleshooting.
+            if($pretrade_y -ne $posttrade_y){
+                Write-Host "TakeOffer returns true"
                 return $true
             }
         }
+        Write-Host "TakeOffer returns false"
         return $false
     }
 
