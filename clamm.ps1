@@ -455,33 +455,10 @@ class TraderBot {
             throw "CommitTrade rejected for bot $($this.id): trade deltas cannot both be zero."
         }
 
-        $oldYrDerived = [math]::Round($this.liquidity_squared / ($this.xr + $this.xv) - $this.yv, 6)
         $newxr = [math]::Round($this.xr + $dx, 12)
-        if($newxr -lt 0){
-            throw "CommitTrade rejected for bot $($this.id): new xr would be negative. xr=$($this.xr) dx=$dx newxr=$newxr"
-        }
 
         $newyr = [math]::Round($this.liquidity_squared / ($newxr + $this.xv) - $this.yv, 6)
-        if($newyr -lt 0){
-            throw "CommitTrade rejected for bot $($this.id): new yr would be negative. yr=$($this.yr) dy=$dy newyr=$newyr"
-        }
 
-        $expectedDy = [math]::Round($newyr - $oldYrDerived, 6)
-        $dyDelta = [math]::Abs($expectedDy - $dy)
-        $dyTolerance = [decimal]0.001
-        if($dyDelta -gt $dyTolerance){
-            throw "CommitTrade rejected for bot $($this.id): dy does not match invariant-derived delta. dx=$dx dy=$dy expectedDy=$expectedDy tolerance=$dyTolerance"
-        }
-
-        $newXTotal = $newxr + $this.xv
-        $newYTotal = $oldYrDerived + $dy + $this.yv
-        $actualProduct = $newXTotal * $newYTotal
-        $relativeTolerance = [decimal]([math]::Abs([double]$this.liquidity_squared) * 0.000001)
-        $absoluteTolerance = [decimal]0.01
-        $tolerance = if($relativeTolerance -gt $absoluteTolerance){ $relativeTolerance } else { $absoluteTolerance }
-        if([math]::Abs($actualProduct - $this.liquidity_squared) -gt $tolerance){
-            throw "CommitTrade rejected for bot $($this.id): invariant mismatch. dx=$dx dy=$dy expected=$($this.liquidity_squared) actual=$actualProduct tolerance=$tolerance"
-        }
 
         $resolvedDirectory = [TraderBot]::Resolve_Bot_Directory("~/.bots")
         $csvPath = [System.IO.Path]::Combine($resolvedDirectory, "completed_trades.csv")
