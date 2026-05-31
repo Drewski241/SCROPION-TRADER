@@ -899,3 +899,8 @@ function Show-TraderBots{
         Write-Error "No bots found"
     }
 }
+
+function New-TraderBot{
+    $bot = [TraderBot]::Build()
+    return $bot
+}
