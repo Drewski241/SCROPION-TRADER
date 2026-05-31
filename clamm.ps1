@@ -870,9 +870,19 @@ class TraderBot {
         while($true){
             Get-Date
             Write-Host "Checking Dexie for offers from XCH"
-            $this.HandleDexieFromX()
+            try{
+                $this.HandleDexieFromX()
+            } catch {
+                Write-Host "Exception: $($_.Exception.Message)" 
+            }   
             Write-Host "Checking Dexie for offers from $($this.token_y)"
-            $this.HandleDexieFromY()
+            try{
+                $this.HandleDexieFromY()
+            } catch {
+                Write-Host "Exception: $($_.Exception.Message)" 
+            }
+            
+            
             Write-Host "Waiting 30 seconds"
             start-sleep 30
         }
