@@ -567,12 +567,12 @@ class TraderBot {
     }
 
     [array]GetDexieFromX(){
-        $offer = Get-DexieOffers -offered $($this.token_y) -requested "xch" -page_size 1
+        $offer = Get-DexieOffers -offered $($this.token_y) -requested "xch" -page_size 5
         return $offer.offers
     }
 
     [array]GetDexieFromY(){
-        $offer = Get-DexieOffers -requested $($this.token_y) -offered "xch" -page_size 1
+        $offer = Get-DexieOffers -requested $($this.token_y) -offered "xch" -page_size 5
         return $offer.offers
     }
 
@@ -580,12 +580,18 @@ class TraderBot {
 
     [void]HandleDexieFromX(){
         $dexX = $this.GetDexieFromX()
-        $this.HandleOffer($dexX.offer)
+        foreach($offer in $dexX){
+            $this.HandleOffer($offer.offer)
+        }
+        
     }
 
     [void]HandleDexieFromY(){
         $dexY = $this.GetDexieFromY()
-        $this.HandleOffer($dexY.offer)
+        foreach($offer in $dexY){
+            $this.HandleOffer($offer.offer)
+        }
+        
     }
 
     [array]Trades(){
@@ -656,11 +662,17 @@ class TraderBot {
     }
 
     [pscustomobject]GetTibetQuoteFromX($amount){
+        if($amount -le 0){
+            throw "The amount for tibet quotes must be greater than 0"
+        }
         $quote = Get-TibetQuote -pair_id $this.pair_id -amount_in ($amount | ConvertTo-XchMojo) -xch_is_input
         return $quote
     }
 
     [pscustomobject]GetTibetQuoteFromY($amount){
+        if($amount -le 0){
+            throw "The amount for tibet quotes must be greater than 0"
+        }
         $quote = Get-TibetQuote -pair_id $this.pair_id -amount_in ($amount | ConvertTo-CatMojo)
         return $quote
     }
@@ -812,45 +824,78 @@ class TraderBot {
         }
     }
 
-    [bool]Handle(){
+    # [bool]Handle(){
 
-        $dexieX = $this.GetDexieFromX()
-        $dexieXcheck = $this.CheckOffer($dexieX.offer)
-        $tibetXCheck = $this.CheckTibetQuote($this.GetTibetQuoteFromX($dexieXcheck.TibetX))
-        if($dexieXcheck.isProfitable){
-            # check if tibet is profitable
-            if($tibetXCheck.isProfitable){
-                # both profiable, pick the best one.
-                if($dexieXcheck.yProfit -gt $tibetXCheck.yProfit){
-                    # x better
-                    $this.HandleDexieFromX()
-                    return $true
-                } else {
-                    $this.AttemptTibetOffer($tibetXCheck)
-                    return $true
-                }
-            } 
+    #     $dexieX = $this.GetDexieFromX()
+    #     $dexieXcheck = $this.CheckOffer($dexieX.offer)
+    #     $tibetXCheck = $this.CheckTibetQuote($this.GetTibetQuoteFromX($dexieXcheck.TibetX))
+    #     if($dexieXcheck.isProfitable){
+    #         # check if tibet is profitable
+    #         if($tibetXCheck.isProfitable){
+    #             # both profiable, pick the best one.
+    #             if($dexieXcheck.yProfit -gt $tibetXCheck.yProfit){
+    #                 # x better
+    #                 $this.HandleDexieFromX()
+    #                 return $true
+    #             } else {
+    #                 $this.AttemptTibetOffer($tibetXCheck)
+    #                 return $true
+    #             }
+    #         } 
+    #         $this.HandleDexieFromX()
+    #         return $true
+    #     }
+
+    #     $dexieY = $this.GetDexieFromY()
+    #     $dexieYcheck = $this.checkoffer($dexieY.offer)
+    #     $tibetYcheck = $this.CheckTibetQuote($this.GetTibetQuoteFromY($dexieYcheck.TibetY))
+    #     if($dexieYcheck.isProfitable){
+    #         if($tibetYcheck.isProfitable){
+    #             if($dexieYcheck.xProfit -gt $tibetYcheck.xProfit){
+    #                 $this.HandleDexieFromY()
+    #                 return $true
+    #             } else {
+    #                 $this.AttemptTibetOffer($tibetYcheck)
+    #                 return $true
+    #             }
+    #         }
+    #         $this.HandleDexieFromY()
+    #         return $true
+    #     }
+    #     return $false
+    # }
+
+
+    longrun(){
+        while($true){
             $this.HandleDexieFromX()
-            return $true
-        }
-
-        $dexieY = $this.GetDexieFromY()
-        $dexieYcheck = $this.checkoffer($dexieY.offer)
-        $tibetYcheck = $this.CheckTibetQuote($this.GetTibetQuoteFromY($dexieYcheck.TibetY))
-        if($dexieYcheck.isProfitable){
-            if($tibetYcheck.isProfitable){
-                if($dexieYcheck.xProfit -gt $tibetYcheck.xProfit){
-                    $this.HandleDexieFromY()
-                    return $true
-                } else {
-                    $this.AttemptTibetOffer($tibetYcheck)
-                    return $true
-                }
-            }
             $this.HandleDexieFromY()
-            return $true
+            start-sleep 30
         }
-        return $false
+    }
+
+}
+
+
+function Import-TraderBot{
+    param(
+        [string]$botName
+    )
+    try {
+        $bot =  [TraderBot]::Import($botName)
+        return $bot
+    }
+    catch {
+        throw "Could not load bot with name $($botName)"
     }
 }
 
+function Show-TraderBots{
+    $directory = "~/.bots"
+    $files = Get-ChildItem -Path $directory -Filter *.json
+    if($files.count -gt 0){
+        $files.BaseName
+    } else {
+        Write-Error "No bots found"
+    }
+}
