@@ -848,7 +848,12 @@ class TraderBot {
 
     longrun(){
         while($true){
-            Get-Date
+            Write-Host "-------------------------------------------------" -ForegroundColor Cyan
+            Write-Host "Current XCH Balance: $($this.xr)" -ForegroundColor Cyan
+            Write-Host "Current $($this.token_y) Balance: $($this.yr)"  -ForegroundColor Cyan
+            Write-Host "-------------------------------------------------" -ForegroundColor Cyan
+            Write-Host ""
+            
             Write-Host "Checking Dexie for offers from XCH"
             $sell = ($this.Adjust_X_Amount(-1)).dy
             $buy = ($this.Adjust_X_Amount(1)).dy
