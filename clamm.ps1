@@ -848,8 +848,18 @@ class TraderBot {
 
     longrun(){
         while($true){
-            $sell = ($this.Adjust_X_Amount(-1)).dy
-            $buy = ($this.Adjust_X_Amount(1)).dy
+            try{
+                $sell = ($this.Adjust_X_Amount(-1)).dy
+            } catch {
+                $sell = "NA"
+            }
+            try{
+                $buy = ($this.Adjust_X_Amount(1)).dy
+            } catch {
+                $buy = "NA"
+            }
+            
+            
             Write-Host ""
             Write-Host "-------------------------------------------------" -ForegroundColor Cyan
             Write-Host "Currently trading [ $($buy) ] $($this.token_y) for [ 1 XCH ]" -ForegroundColor Cyan
