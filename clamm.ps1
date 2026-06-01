@@ -848,23 +848,28 @@ class TraderBot {
 
     longrun(){
         while($true){
+            $sell = ($this.Adjust_X_Amount(-1)).dy
+            $buy = ($this.Adjust_X_Amount(1)).dy
+            Write-Host ""
             Write-Host "-------------------------------------------------" -ForegroundColor Cyan
+            Write-Host "Currently trading $($buy) $($this.tokenY) for 1 XCH"
+            Write-Host "Currently trading 1 XCH for $($sell) $($this.token_y)"
+            Write-Host ""
             Write-Host "Current XCH Balance: $($this.xr)" -ForegroundColor Cyan
             Write-Host "Current $($this.token_y) Balance: $($this.yr)"  -ForegroundColor Cyan
             Write-Host "-------------------------------------------------" -ForegroundColor Cyan
             Write-Host ""
-            
+
             Write-Host "Checking Dexie for offers from XCH"
-            $sell = ($this.Adjust_X_Amount(-1)).dy
-            $buy = ($this.Adjust_X_Amount(1)).dy
-            Write-Host "Currently trading 1 XCH for $($sell) $($this.token_y)"
+            
+            
             try{
                 $this.HandleDexieFromX()
             } catch {
                 Write-Host "Exception: $($_.Exception.Message)" 
             }   
 
-            Write-Host "Currently trading $($buy) $($this.tokenY) for 1 XCH"
+            
             Write-Host "Checking Dexie for offers from $($this.token_y)"
             try{
                 $this.HandleDexieFromY()
