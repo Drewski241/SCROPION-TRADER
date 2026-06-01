@@ -544,30 +544,29 @@ class TraderBot {
     }
 
     [array]GetDexieFromX(){
-        $offer = Get-DexieOffers -offered $($this.token_y) -requested "xch" -page_size 5
+        $offer = Get-DexieOffers -offered $($this.token_y) -requested "xch" -page_size 1
         return $offer.offers
     }
 
     [array]GetDexieFromY(){
-        $offer = Get-DexieOffers -requested $($this.token_y) -offered "xch" -page_size 5
+        $offer = Get-DexieOffers -requested $($this.token_y) -offered "xch" -page_size 1
         return $offer.offers
     }
 
 
 
     [void]HandleDexieFromX(){
-        $dexX = $this.GetDexieFromX()
-        foreach($offer in $dexX){
-            $this.HandleOffer($offer.offer)
-        }
+        $offer = $this.GetDexieFromX()
+        
+        $this.HandleOffer($offer.offer)
+        
         
     }
 
     [void]HandleDexieFromY(){
-        $dexY = $this.GetDexieFromY()
-        foreach($offer in $dexY){
-            $this.HandleOffer($offer.offer)
-        }
+        $offer = $this.GetDexieFromY()
+        $this.HandleOffer($offer.offer)
+        
         
     }
 
