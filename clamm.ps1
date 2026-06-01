@@ -46,6 +46,16 @@ class TraderBot {
     [decimal]$yr 
     [decimal]$liquidity_squared
     [decimal]$liquidity
+    [decimal]$min_profit_x = 0
+    [decimal]$min_profit_y = 0
+    [decimal]$min_profit_bps = 5
+    [int]$dexie_page_size = 10
+    [int]$max_trade_attempts = 3
+    [int]$retry_delay_seconds = 2
+    [int]$max_consecutive_failures = 5
+    [int]$consecutive_failures = 0
+    [int]$cooldown_seconds = 60
+    [datetime]$cooldown_until = [datetime]::MinValue
     
     TraderBot(){}
 
@@ -171,6 +181,14 @@ class TraderBot {
         $this.yr = [decimal]$props.yr
         $this.liquidity_squared = [decimal]$props.liquidity_squared
         $this.liquidity = [decimal]$props.liquidity
+        if($null -ne $props.PSObject.Properties['min_profit_x']){ $this.min_profit_x = [decimal]$props.min_profit_x }
+        if($null -ne $props.PSObject.Properties['min_profit_y']){ $this.min_profit_y = [decimal]$props.min_profit_y }
+        if($null -ne $props.PSObject.Properties['min_profit_bps']){ $this.min_profit_bps = [decimal]$props.min_profit_bps }
+        if($null -ne $props.PSObject.Properties['dexie_page_size']){ $this.dexie_page_size = [int]$props.dexie_page_size }
+        if($null -ne $props.PSObject.Properties['max_trade_attempts']){ $this.max_trade_attempts = [int]$props.max_trade_attempts }
+        if($null -ne $props.PSObject.Properties['retry_delay_seconds']){ $this.retry_delay_seconds = [int]$props.retry_delay_seconds }
+        if($null -ne $props.PSObject.Properties['max_consecutive_failures']){ $this.max_consecutive_failures = [int]$props.max_consecutive_failures }
+        if($null -ne $props.PSObject.Properties['cooldown_seconds']){ $this.cooldown_seconds = [int]$props.cooldown_seconds }
         $this.Validate_Price_Range()
     }
 
@@ -244,6 +262,14 @@ class TraderBot {
             yr = $this.yr
             liquidity_squared = $this.liquidity_squared
             liquidity = $this.liquidity
+            min_profit_x = $this.min_profit_x
+            min_profit_y = $this.min_profit_y
+            min_profit_bps = $this.min_profit_bps
+            dexie_page_size = $this.dexie_page_size
+            max_trade_attempts = $this.max_trade_attempts
+            retry_delay_seconds = $this.retry_delay_seconds
+            max_consecutive_failures = $this.max_consecutive_failures
+            cooldown_seconds = $this.cooldown_seconds
         }
 
         $payload | ConvertTo-Json -Depth 5 | Set-Content -Path $filePath -Encoding utf8
@@ -428,6 +454,65 @@ class TraderBot {
         Return @{isProfitable = $false}
     }
 
+    [object]InvokeWithRetry([scriptblock]$Action, [string]$Operation){
+        $lastError = $null
+        for($attempt = 1; $attempt -le $this.max_trade_attempts; $attempt++){
+            try{
+                return & $Action
+            } catch {
+                $lastError = $_
+                if($attempt -ge $this.max_trade_attempts){
+                    break
+                }
+                $delay = [Math]::Pow(2, ($attempt - 1)) * $this.retry_delay_seconds
+                Write-Host "$Operation failed on attempt $attempt. Retrying in $delay seconds..." -ForegroundColor Yellow
+                Start-Sleep -Seconds $delay
+            }
+        }
+
+        throw "$Operation failed after $($this.max_trade_attempts) attempts. Last error: $($lastError.Exception.Message)"
+    }
+
+    [decimal]GetProfitBps([hashtable]$checked_offer){
+        if($checked_offer.xProfit -gt 0 -and [Math]::Abs([decimal]$checked_offer.dx) -gt 0){
+            return [math]::Round((([decimal]$checked_offer.xProfit / [Math]::Abs([decimal]$checked_offer.dx)) * 10000), 3)
+        }
+        if($checked_offer.yProfit -gt 0 -and [Math]::Abs([decimal]$checked_offer.dy) -gt 0){
+            return [math]::Round((([decimal]$checked_offer.yProfit / [Math]::Abs([decimal]$checked_offer.dy)) * 10000), 3)
+        }
+        return 0
+    }
+
+    [bool]MeetsProfitThresholds([hashtable]$checked_offer){
+        $profitBps = $this.GetProfitBps($checked_offer)
+        $enoughX = ([decimal]$checked_offer.xProfit -ge $this.min_profit_x)
+        $enoughY = ([decimal]$checked_offer.yProfit -ge $this.min_profit_y)
+        $enoughBps = ($profitBps -ge $this.min_profit_bps)
+        return (($enoughX -or $enoughY) -and $enoughBps)
+    }
+
+    [array]RankDexieOffers([array]$offers){
+        $ranked = @()
+        foreach($offerItem in $offers){
+            try{
+                $offerText = if($offerItem -is [string]) { $offerItem } else { $offerItem.offer }
+                if([string]::IsNullOrWhiteSpace($offerText)){ continue }
+                $checked = $this.CheckOffer($offerText)
+                if(-not $checked.isProfitable){ continue }
+                if(-not $this.MeetsProfitThresholds($checked)){ continue }
+                $ranked += [pscustomobject]@{
+                    checked_offer = $checked
+                    source_offer = $offerItem
+                    profit_bps = $this.GetProfitBps($checked)
+                }
+            } catch {
+                Write-Host "Skipping invalid offer during ranking: $($_.Exception.Message)" -ForegroundColor DarkYellow
+            }
+        }
+
+        return @($ranked | Sort-Object -Property @{Expression='profit_bps';Descending=$true}, @{Expression={$_.checked_offer.yProfit};Descending=$true}, @{Expression={$_.checked_offer.xProfit};Descending=$true})
+    }
+
     [void]CommitTrade([hashtable]$checked_offer){
         if([string]::IsNullOrWhiteSpace($this.id)){
             throw "Bot id must be set before committing a trade. Call SaveToJson first or assign an id."
@@ -464,6 +549,7 @@ class TraderBot {
         $csvPath = [System.IO.Path]::Combine($resolvedDirectory, "completed_trades.csv")
 
         $row = [pscustomobject][ordered]@{
+            trade_id  = if($checked_offer.ContainsKey('trade_id')){ $checked_offer.trade_id } else { [string]::Format("{0}-{1}", $this.id, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) }
             bot_name  = $this.id
             dx        = $dx
             dy        = $dy
@@ -544,46 +630,59 @@ class TraderBot {
     }
 
     [array]GetDexieFromX(){
-        $offer = Get-DexieOffers -offered $($this.token_y) -requested "xch" -page_size 1
-        return $offer.offers
+        $offer = $this.InvokeWithRetry({
+            Get-DexieOffers -offered $($this.token_y) -requested "xch" -page_size $($this.dexie_page_size)
+        }, "GetDexieFromX")
+        return @($offer.offers)
     }
 
     [array]GetDexieFromY(){
-        $offer = Get-DexieOffers -requested $($this.token_y) -offered "xch" -page_size 1
-        return $offer.offers
+        $offer = $this.InvokeWithRetry({
+            Get-DexieOffers -requested $($this.token_y) -offered "xch" -page_size $($this.dexie_page_size)
+        }, "GetDexieFromY")
+        return @($offer.offers)
     }
 
 
 
     [void]HandleDexieFromX(){
-        $offer = $this.GetDexieFromX()
-        
-        $this.HandleOffer($offer.offer)
-        
-        
+        $offers = $this.GetDexieFromX()
+        $ranked = $this.RankDexieOffers($offers)
+        if($ranked.Count -gt 0){
+            $this.ExecuteCheckedOffer($ranked[0].checked_offer)
+        }
     }
 
     [void]HandleDexieFromY(){
-        $offer = $this.GetDexieFromY()
-        $this.HandleOffer($offer.offer)
-        
-        
+        $offers = $this.GetDexieFromY()
+        $ranked = $this.RankDexieOffers($offers)
+        if($ranked.Count -gt 0){
+            $this.ExecuteCheckedOffer($ranked[0].checked_offer)
+        }
     }
 
     [array]Trades(){
         $resolvedDirectory = [TraderBot]::Resolve_Bot_Directory("~/.bots")
         $csvPath = [System.IO.Path]::Combine($resolvedDirectory, "completed_trades.csv")
+        if(-not (Test-Path -Path $csvPath)){
+            return @()
+        }
         $trades = Import-Csv -Path $csvPath | Where-Object {$_.bot_name -eq $this.id}
         return $trades
     }
 
     [bool]TakeOffer($checked_offer){
         Write-Host "Trying to take an offer with TakeOffer()"
+        if((Get-Date) -lt $this.cooldown_until){
+            Write-Host "Bot is cooling down until $($this.cooldown_until.ToString('o'))" -ForegroundColor Yellow
+            return $false
+        }
+
         $pretrade_y = ((get-sagecats).cats | Where-Object {$_.asset_id -eq $($this.token_y_id)}).selectable_balance
         Write-Host "PreTrade TokenY = $($pretrade_y)"
-        $read = read-sageoffer -offer $checked_offer.offer
+        $read = $this.InvokeWithRetry({ read-sageoffer -offer $checked_offer.offer }, "Read-SageOffer")
         if($read.status -eq "active"){
-            $take = Complete-SageOffer -offer $checked_offer.offer
+            $take = $this.InvokeWithRetry({ Complete-SageOffer -offer $checked_offer.offer }, "Complete-SageOffer")
             
             if(-not $take){
                 throw "Offer coult not be taken"
@@ -591,7 +690,11 @@ class TraderBot {
             Write-Host "Offer taken - waiting for completion"
             start-sleep 2
             $count = (Get-SagePendingTransactions).count
+            $deadline = (Get-Date).AddSeconds(90)
             while($count -gt 0){
+                if((Get-Date) -gt $deadline){
+                    throw "Timed out waiting for pending transactions to clear."
+                }
                 start-sleep 10
                 Write-Host "waiting for transactions to process"
                 $count = (Get-SagePendingTransactions).count
@@ -624,6 +727,44 @@ class TraderBot {
                 # Record Transaction
                 $this.CommitTrade($checked_offer)
             }
+        }
+    }
+
+    [void]RecordFailure([string]$reason){
+        $this.consecutive_failures = $this.consecutive_failures + 1
+        Write-Host "Trade failure #$($this.consecutive_failures): $reason" -ForegroundColor Red
+        if($this.consecutive_failures -ge $this.max_consecutive_failures){
+            $this.cooldown_until = (Get-Date).AddSeconds($this.cooldown_seconds)
+            Write-Host "Failure limit reached. Cooling down for $($this.cooldown_seconds)s." -ForegroundColor Yellow
+            $this.consecutive_failures = 0
+        }
+    }
+
+    [void]RecordSuccess(){
+        $this.consecutive_failures = 0
+    }
+
+    [void]ExecuteCheckedOffer([hashtable]$checked_offer){
+        if(-not $checked_offer.isProfitable){
+            return
+        }
+        if(-not $this.MeetsProfitThresholds($checked_offer)){
+            Write-Host "Offer profitable but below configured thresholds." -ForegroundColor DarkYellow
+            return
+        }
+
+        $checked_offer.trade_id = [string]::Format("{0}-{1}", $checked_offer.offer.GetHashCode(), [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        try{
+            $take_offer = $this.TakeOffer($checked_offer)
+            if($take_offer){
+                $this.CommitTrade($checked_offer)
+                $this.RecordSuccess()
+            } else {
+                $this.RecordFailure("Offer was not completed.")
+            }
+        } catch {
+            $this.RecordFailure($_.Exception.Message)
+            throw
         }
     }
 
@@ -669,7 +810,7 @@ class TraderBot {
                     isProfitable = $true
                     dx = $formula_says.dx
                     dy = $formula_says.dy
-                    xProfit = $xprofit
+                    xProfit = $xProfit
                     yProfit = 0 
                     quote = $quote
                 }
@@ -876,7 +1017,7 @@ class TraderBot {
             try{
                 $this.HandleDexieFromX()
             } catch {
-                Write-Host "Exception: $($_.Exception.Message)" 
+                Write-Host "Exception: $($_.Exception.Message)"
             }   
 
             
@@ -884,12 +1025,18 @@ class TraderBot {
             try{
                 $this.HandleDexieFromY()
             } catch {
-                Write-Host "Exception: $($_.Exception.Message)" 
+                Write-Host "Exception: $($_.Exception.Message)"
             }
             
             
-            Write-Host "Waiting 30 seconds"
-            start-sleep 30
+            $waitSeconds = 30
+            if((Get-Date) -lt $this.cooldown_until){
+                $waitSeconds = [Math]::Max(5, [int][Math]::Ceiling(($this.cooldown_until - (Get-Date)).TotalSeconds))
+            } elseif($this.consecutive_failures -gt 0){
+                $waitSeconds = [Math]::Min(120, (30 + ($this.consecutive_failures * 10)))
+            }
+            Write-Host "Waiting $waitSeconds seconds"
+            start-sleep $waitSeconds
         }
     }
 
