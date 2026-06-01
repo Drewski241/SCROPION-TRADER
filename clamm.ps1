@@ -852,8 +852,8 @@ class TraderBot {
             $buy = ($this.Adjust_X_Amount(1)).dy
             Write-Host ""
             Write-Host "-------------------------------------------------" -ForegroundColor Cyan
-            Write-Host "Currently trading $($buy) $($this.tokenY) for 1 XCH"
-            Write-Host "Currently trading 1 XCH for $($sell) $($this.token_y)"
+            Write-Host "Currently trading [ $($buy) ] $($this.token_y) for [ 1 XCH ]" -ForegroundColor Cyan
+            Write-Host "Currently trading [ 1 XCH ] for [ $($sell) $($this.token_y) ]" -ForegroundColor Cyan
             Write-Host ""
             Write-Host "Current XCH Balance: $($this.xr)" -ForegroundColor Cyan
             Write-Host "Current $($this.token_y) Balance: $($this.yr)"  -ForegroundColor Cyan
