@@ -595,9 +595,13 @@ class TraderBot {
         $dy = $newyr - $_yr
         $dx = $amount
 
+        $price = 0
+        if([math]::Abs($dx) -gt 0){
+            $price = [math]::Round(([math]::Abs($dy) / [math]::Abs($dx)), 3)
+        }
 
         $trade = [ordered]@{
-            'price' = [math]::Round(([math]::Abs($dy) / [math]::Abs($dx)),3)
+            'price' = $price
             'newyr' = $newyr
             'newxr' = $newxr
             'amount' = $amount
@@ -628,8 +632,13 @@ class TraderBot {
         $dx = $newxr - $_xr
         $dy = $amount
 
+        $price = 0
+        if([math]::Abs($dx) -gt 0){
+            $price = [math]::Round(([math]::Abs($dy) / [math]::Abs($dx)), 3)
+        }
+
         $trade = [ordered]@{
-            'price' = [math]::Round(([math]::Abs($dy) / [math]::Abs($dx)),3)
+            'price' = $price
             'newyr' = $newyr
             'newxr' = $newxr
             'amount' = $amount
@@ -806,39 +815,43 @@ class TraderBot {
     }
 
     [hashtable]CheckTibetQuote($quote){
-        if($quote.amount_in -lt $quote.amount_out){
-            # wants cat
-            $requested_y = $quote.amount_in | ConvertFrom-CatMojo
-            $offered_xch = $quote.amount_out | ConvertFrom-XchMojo
-            $formula_says = $this.Adjust_Y_Amount(-($requested_y))
-            $xProfit = $offered_xch - ($formula_says.dx)
-            if($xProfit -gt 0){
-                return @{
-                    isProfitable = $true
-                    dx = $formula_says.dx
-                    dy = $formula_says.dy
-                    xProfit = $xProfit
-                    yProfit = 0 
-                    quote = $quote
-                }
-            } 
+        try{
+            if($quote.amount_in -lt $quote.amount_out){
+                # wants cat
+                $requested_y = $quote.amount_in | ConvertFrom-CatMojo
+                $offered_xch = $quote.amount_out | ConvertFrom-XchMojo
+                $formula_says = $this.Adjust_Y_Amount(-($requested_y))
+                $xProfit = $offered_xch - ($formula_says.dx)
+                if($xProfit -gt 0){
+                    return @{
+                        isProfitable = $true
+                        dx = $formula_says.dx
+                        dy = $formula_says.dy
+                        xProfit = $xProfit
+                        yProfit = 0 
+                        quote = $quote
+                    }
+                } 
 
-        } else {
-            # wants XCH
-            $requested_xch = $quote.amount_in | ConvertFrom-XchMojo
-            $offered_y = $quote.amount_out | ConvertFrom-CatMojo
-            $formula_says = $this.Adjust_X_Amount(-($requested_xch))
-            $yProfit = $offered_y - ($formula_says.dy)
-            if($yProfit -gt 0){
-                return @{
-                    isProfitable = $true
-                    dx = $formula_says.dx
-                    dy = $formula_says.dy
-                    xProfit = 0
-                    yProfit = $yProfit  
-                    quote = $quote 
-                }
-            } 
+            } else {
+                # wants XCH
+                $requested_xch = $quote.amount_in | ConvertFrom-XchMojo
+                $offered_y = $quote.amount_out | ConvertFrom-CatMojo
+                $formula_says = $this.Adjust_X_Amount(-($requested_xch))
+                $yProfit = $offered_y - ($formula_says.dy)
+                if($yProfit -gt 0){
+                    return @{
+                        isProfitable = $true
+                        dx = $formula_says.dx
+                        dy = $formula_says.dy
+                        xProfit = 0
+                        yProfit = $yProfit  
+                        quote = $quote 
+                    }
+                } 
+            }
+        } catch {
+            return @{ isProfitable = $false; reason = $_.Exception.Message }
         }
         return @{isProfitable=$false}
     }

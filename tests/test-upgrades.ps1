@@ -16,7 +16,7 @@ function Get-SageCats {
     return [pscustomobject]@{
         cats = @([pscustomobject]@{
             asset_id = "token-y-id"
-            selectable_balance = 999999
+            balance = 999999
         })
     }
 }
