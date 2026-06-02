@@ -308,15 +308,40 @@ class TraderBot {
         Remove-Item -Path $filePath -Force
     }
 
+    static [string]Resolve_Bot_File_Path([string]$botName, [string]$directory){
+        if([string]::IsNullOrWhiteSpace($botName)){
+            throw "Bot name is required."
+        }
+
+        $directPath = [TraderBot]::Build_Bot_File_Path($botName, $directory)
+        if(Test-Path -Path $directPath){
+            return $directPath
+        }
+
+        $resolvedDirectory = [TraderBot]::Resolve_Bot_Directory($directory)
+        $files = @(Get-ChildItem -Path $resolvedDirectory -Filter *.json -ErrorAction SilentlyContinue)
+        foreach($file in $files){
+            try{
+                $data = Get-Content -Path $file.FullName -Raw | ConvertFrom-Json
+                if($data.id -ieq $botName -or $data.token_y -ieq $botName){
+                    return $file.FullName
+                }
+            } catch {
+                continue
+            }
+        }
+
+        $available = @($files | ForEach-Object { $_.BaseName })
+        $availableText = if($available.Count -gt 0){ $available -join ', ' } else { '(none)' }
+        throw "Bot '$botName' not found in $resolvedDirectory. Available bot files: $availableText"
+    }
+
     static [TraderBot]Import([string]$token_y){
         return [TraderBot]::Import($token_y, "~/.bots")
     }
 
     static [TraderBot]Import([string]$token_y, [string]$directory){
-        $filePath = [TraderBot]::Build_Bot_File_Path($token_y, $directory)
-        if(-not (Test-Path -Path $filePath)){
-            throw "Bot file not found: $filePath"
-        }
+        $filePath = [TraderBot]::Resolve_Bot_File_Path($token_y, $directory)
 
         try{
             $data = Get-Content -Path $filePath -Raw | ConvertFrom-Json
