@@ -53,6 +53,9 @@ Give your bot a name: <name>
 
 ```powershell
 $bot = Import-TraderBot -botName <name>
-$bot.longrun()
+$bot.longrun()          # uses default_tibet_x_amount (0.2 XCH)
+$bot.longrun(0.5)       # optional: custom Tibet quote size in XCH
 ```
+
+This fork tracks [AbandonedLand/TibetTrader](https://github.com/AbandonedLand/TibetTrader) for core AMM math and adds execution safeguards (profit thresholds, multi-offer ranking, retries, cooldowns). Tibet quote display amounts use `ConvertFrom-CatMojo` / `ConvertFrom-XchMojo` (not hardcoded `/1000` divisors).
 

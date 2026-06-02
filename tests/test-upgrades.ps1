@@ -108,4 +108,14 @@ $bot.cooldown_until = (Get-Date).AddSeconds(5)
 $blocked = $bot.TakeOffer(@{ offer = "offer-a" })
 Assert-True -Value (-not $blocked) -Message "TakeOffer should not execute during cooldown"
 
+# CheckTibetQuote must assign xProfit with correct casing (upstream had $xprofit typo).
+$quote = [pscustomobject]@{
+    amount_in = 1000
+    amount_out = 2000000000000
+}
+$checkedTibet = $bot.CheckTibetQuote($quote)
+if($checkedTibet.isProfitable -and $null -eq $checkedTibet.xProfit){
+    throw "CheckTibetQuote returned null xProfit for profitable quote."
+}
+
 Write-Host "All upgrade checks passed."

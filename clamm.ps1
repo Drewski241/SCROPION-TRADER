@@ -56,6 +56,7 @@ class TraderBot {
     [int]$consecutive_failures = 0
     [int]$cooldown_seconds = 60
     [datetime]$cooldown_until = [datetime]::MinValue
+    [decimal]$default_tibet_x_amount = 0.2
     
     TraderBot(){}
 
@@ -189,6 +190,7 @@ class TraderBot {
         if($null -ne $props.PSObject.Properties['retry_delay_seconds']){ $this.retry_delay_seconds = [int]$props.retry_delay_seconds }
         if($null -ne $props.PSObject.Properties['max_consecutive_failures']){ $this.max_consecutive_failures = [int]$props.max_consecutive_failures }
         if($null -ne $props.PSObject.Properties['cooldown_seconds']){ $this.cooldown_seconds = [int]$props.cooldown_seconds }
+        if($null -ne $props.PSObject.Properties['default_tibet_x_amount']){ $this.default_tibet_x_amount = [decimal]$props.default_tibet_x_amount }
         $this.Validate_Price_Range()
     }
 
@@ -270,6 +272,7 @@ class TraderBot {
             retry_delay_seconds = $this.retry_delay_seconds
             max_consecutive_failures = $this.max_consecutive_failures
             cooldown_seconds = $this.cooldown_seconds
+            default_tibet_x_amount = $this.default_tibet_x_amount
         }
 
         $payload | ConvertTo-Json -Depth 5 | Set-Content -Path $filePath -Encoding utf8
@@ -678,7 +681,7 @@ class TraderBot {
             return $false
         }
 
-        $pretrade_y = ((get-sagecats).cats | Where-Object {$_.asset_id -eq $($this.token_y_id)}).selectable_balance
+        $pretrade_y = ((get-sagecats).cats | Where-Object {$_.asset_id -eq $($this.token_y_id)}).balance
         Write-Host "PreTrade TokenY = $($pretrade_y)"
         $read = $this.InvokeWithRetry({ read-sageoffer -offer $checked_offer.offer }, "Read-SageOffer")
         if($read.status -eq "active"){
@@ -700,7 +703,7 @@ class TraderBot {
                 $count = (Get-SagePendingTransactions).count
             }
             
-            $posttrade_y = ((get-sagecats).cats | Where-Object {$_.asset_id -eq $($this.token_y_id)}).selectable_balance
+            $posttrade_y = ((get-sagecats).cats | Where-Object {$_.asset_id -eq $($this.token_y_id)}).balance
             Write-Host "Offer has completed. Post Trade TokenY = $($posttrade_y)"
             # This is a stupid way to check, but need to do some troubleshooting.
             if($pretrade_y -ne $posttrade_y){
@@ -713,20 +716,9 @@ class TraderBot {
     }
 
     [void]HandleOffer($offer_string){
-        
-        # Check for profitability
         $checked_offer = $this.CheckOffer($offer_string)
-        
         if($checked_offer.isProfitable){
-
-            # Take profitable offer
-            $take_offer = $this.TakeOffer($checked_offer)
-            
-            
-            if($take_offer){
-                # Record Transaction
-                $this.CommitTrade($checked_offer)
-            }
+            $this.ExecuteCheckedOffer($checked_offer)
         }
     }
 
@@ -752,6 +744,11 @@ class TraderBot {
             Write-Host "Offer profitable but below configured thresholds." -ForegroundColor DarkYellow
             return
         }
+
+        Write-Host ""
+        Write-Host "Offer has $($checked_offer.yProfit) of $($this.token_y) profit" -ForegroundColor Green
+        Write-Host "Offer has $($checked_offer.xProfit) of XCH profit" -ForegroundColor Green
+        Write-Host ""
 
         $checked_offer.trade_id = [string]::Format("{0}-{1}", $checked_offer.offer.GetHashCode(), [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
         try{
@@ -819,7 +816,7 @@ class TraderBot {
         } else {
             # wants XCH
             $requested_xch = $quote.amount_in | ConvertFrom-XchMojo
-            $offered_y = $quote.amount_out | ConvertFrom-catMojo
+            $offered_y = $quote.amount_out | ConvertFrom-CatMojo
             $formula_says = $this.Adjust_X_Amount(-($requested_xch))
             $yProfit = $offered_y - ($formula_says.dy)
             if($yProfit -gt 0){
@@ -839,6 +836,10 @@ class TraderBot {
     [bool]AttemptTibetOffer($checked_quote){
         if(-Not $checked_quote.isProfitable){
             Write-Host "Tibet offer not profitable"
+            return $false
+        }
+        if(-not $this.MeetsProfitThresholds($checked_quote)){
+            Write-Host "Tibet offer profitable but below configured thresholds." -ForegroundColor DarkYellow
             return $false
         }
         $offered_amount = $checked_quote.quote.amount_in 
@@ -864,22 +865,36 @@ class TraderBot {
             Remove-SageOffer -offer_id $offer.offer_id
             return $false
         }
-        Write-Host "offer submitted to tibetswap, waiting 5 sec to test"
+        Write-Host "Offer submitted to tibetswap." -ForegroundColor Yellow
         start-sleep 5
         $trackedOffer = Get-SageOffer -offer_id $offer.offer_id
+        Write-Host "Checking offer Status..." -ForegroundColor Yellow
+        Write-Host "Status: $($trackedOffer.status)" -ForegroundColor Yellow
         while($trackedOffer.status -eq "active"){
             Start-Sleep 10
             $trackedOffer = Get-SageOffer -offer_id $offer.offer_id
+            Write-Host "Checking offer Status..." -ForegroundColor Yellow
+            Write-Host "Status: $($trackedOffer.status)" -ForegroundColor Yellow
         }
         if($trackedOffer.status -eq "completed"){
             $this.CommitTrade($checked_quote)
+            $this.RecordSuccess()
+            Write-Host "Tibet Trade Successful!" -ForegroundColor Green
             return $true
         } else {
-            start-sleep 60
+            Write-Host "Something happened.  Waiting 60 seconds and checking again." -ForegroundColor Red
+            Write-Host "Status: $($trackedOffer.status)" -ForegroundColor Red
+            Start-Sleep 60
             $trackedOffer = Get-SageOffer -offer_id $offer.offer_id
+            Write-Host "Status: $($trackedOffer.status)" -ForegroundColor Red
             if($trackedOffer.status -eq "completed"){
+                Write-Host "Trade shows as completed now." -ForegroundColor Green
                 $this.CommitTrade($checked_quote)
+                $this.RecordSuccess()
                 return $true
+            } else {
+                Write-Host "Trade Failed.. offer should expire on it's own." -ForegroundColor Red
+                $this.RecordFailure("Tibet offer did not complete.")
             }
         }
         return $false
@@ -988,6 +1003,13 @@ class TraderBot {
 
 
     longrun(){
+        $this.longrun($this.default_tibet_x_amount)
+    }
+
+    longrun([decimal]$tibet_X_amount){
+        if($tibet_X_amount -le 0){
+            throw "You must set the tibet_x_amount to be a decimal number greater than 0."
+        }
         while($true){
             try{
                 $sell = ($this.Adjust_X_Amount(-1)).dy
@@ -1017,7 +1039,7 @@ class TraderBot {
             try{
                 $this.HandleDexieFromX()
             } catch {
-                Write-Host "Exception: $($_.Exception.Message)"
+                Write-Error "Exception: $($_.Exception.Message)"
             }   
 
             
@@ -1025,9 +1047,51 @@ class TraderBot {
             try{
                 $this.HandleDexieFromY()
             } catch {
-                Write-Host "Exception: $($_.Exception.Message)"
+                Write-Error "Exception: $($_.Exception.Message)"
             }
-            
+
+            Write-Host ""
+            Write-Host "-------------------------------------------------" -ForegroundColor Cyan
+            Write-Host "Checking Tibet Offers XCH -> $($this.token_y)" -ForegroundColor Cyan
+            Write-Host ""
+
+            try{
+                $tibxch = $this.InvokeWithRetry({ $this.GetTibetQuoteFromX($tibet_X_amount) }, "GetTibetQuoteFromX")
+                $tby = $tibxch.amount_out | ConvertFrom-CatMojo
+                $tiby = $this.InvokeWithRetry({ $this.GetTibetQuoteFromY($tby) }, "GetTibetQuoteFromY")
+                $tbx = $tiby.amount_out | ConvertFrom-XchMojo
+                $checkx = $this.CheckTibetQuote($tibxch)
+                $checky = $this.CheckTibetQuote($tiby)
+                if($checkx.isProfitable){
+                    Write-Host "Tibetswap offers [ $($tby) $($this.token_y) ] for [ $($tibet_X_amount) XCH ]"  -ForegroundColor Green
+                    Write-Host "This offer has $($checkx.yProfit) $($this.token_y) of profit." -ForegroundColor Green
+                    $this.AttemptTibetOffer($checkx)
+                    Write-Host "-------------------------------------------------" -ForegroundColor Cyan
+                    Write-Host ""
+                } else {
+                    Write-Host "Tibetswap offers [ $($tby) $($this.token_y) ] for [ $($tibet_X_amount) XCH ]"  -ForegroundColor Red
+                    Write-Host "This offer is not profitable." -ForegroundColor Red
+                    Write-Host "-------------------------------------------------" -ForegroundColor Cyan
+                    Write-Host ""
+                }
+                Write-Host ""
+                Write-Host "-------------------------------------------------" -ForegroundColor Cyan
+                Write-Host "Checking Tibet Offers $($this.token_y) -> XCH" -ForegroundColor Cyan
+                if($checky.isProfitable){
+                    Write-Host "Tibetswap offers [ $($tbx) XCH ] for [ $($tby) $($this.token_y) ]" -ForegroundColor Green
+                    Write-Host "This offer has $($checky.xProfit) XCH of profit." -ForegroundColor Green
+                    $this.AttemptTibetOffer($checky)
+                    Write-Host "-------------------------------------------------" -ForegroundColor Cyan
+                    Write-Host ""
+                } else {
+                    Write-Host "Tibetswap offers [ $($tbx) XCH ] for [ $($tby) $($this.token_y) ]" -ForegroundColor Red
+                    Write-Host "This offer is not profitable." -ForegroundColor Red
+                    Write-Host "-------------------------------------------------" -ForegroundColor Cyan
+                    Write-Host ""
+                }
+            } catch {
+                Write-Error "Exception: $($_.Exception.Message)"
+            }
             
             $waitSeconds = 30
             if((Get-Date) -lt $this.cooldown_until){
