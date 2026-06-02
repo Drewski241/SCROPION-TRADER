@@ -233,13 +233,57 @@ class TraderBot {
             $startingPrompt = "Enter starting amount in $($bot.token_y) (CAT)"
         }
 
-        if($null -ne $marketSuggestion){
-            $startingAmount = [TraderBot]::Prompt_Positive_DecimalWithDefault($startingPrompt, $defaultStartingAmount)
-        } else {
-            $startingAmount = [TraderBot]::Prompt_Positive_Decimal($startingPrompt)
+        while($true){
+            if($null -ne $marketSuggestion){
+                $startingAmount = [TraderBot]::Prompt_Positive_DecimalWithDefault($startingPrompt, $defaultStartingAmount)
+            } else {
+                $startingAmount = [TraderBot]::Prompt_Positive_Decimal($startingPrompt)
+            }
+
+            $bot.Starting_Token_Amount($startingAmount)
+
+            if($null -eq $marketSuggestion){
+                break
+            }
+
+            if($bot.x_is_default){
+                $recommended = [decimal]$marketSuggestion.suggested_start_xch
+                if($startingAmount -lt $recommended){
+                    Write-Host "Starting XCH amount $startingAmount is below recommended $recommended based on recent market sizes." -ForegroundColor Yellow
+                    $retry = (Read-Host "Use a larger starting amount? [Y/n]").Trim()
+                    if($retry -notin @('n','N')){
+                        $bot = [TraderBot]::new()
+                        $bot.pair_id = [string]$pairInfo.pair_id
+                        $bot.token_y_id = [string]$pairInfo.asset_id
+                        $bot.token_y = if(-not [string]::IsNullOrWhiteSpace([string]$pairInfo.asset_short_name)){ [string]$pairInfo.asset_short_name } else { $tokenInput }
+                        $bot.x_is_default = $true
+                        $bot.default_tibet_x_amount = $quoteXchAmount
+                        $bot.pa = [decimal]$priceProfile.pa
+                        $bot.pb = [decimal]$priceProfile.pb
+                        continue
+                    }
+                }
+            } else {
+                $recommended = [decimal]$marketSuggestion.suggested_start_y
+                if($startingAmount -lt $recommended){
+                    Write-Host "Starting $($bot.token_y) amount $startingAmount is below recommended $recommended based on recent market sizes." -ForegroundColor Yellow
+                    $retry = (Read-Host "Use a larger starting amount? [Y/n]").Trim()
+                    if($retry -notin @('n','N')){
+                        $bot = [TraderBot]::new()
+                        $bot.pair_id = [string]$pairInfo.pair_id
+                        $bot.token_y_id = [string]$pairInfo.asset_id
+                        $bot.token_y = if(-not [string]::IsNullOrWhiteSpace([string]$pairInfo.asset_short_name)){ [string]$pairInfo.asset_short_name } else { $tokenInput }
+                        $bot.x_is_default = $false
+                        $bot.default_tibet_x_amount = $quoteXchAmount
+                        $bot.pa = [decimal]$priceProfile.pa
+                        $bot.pb = [decimal]$priceProfile.pb
+                        continue
+                    }
+                }
+            }
+            break
         }
 
-        $bot.Starting_Token_Amount($startingAmount)
         $bot.id = [TraderBot]::Prompt_Name()
         $bot.save()
         return $bot
