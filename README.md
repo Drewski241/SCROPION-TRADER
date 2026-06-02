@@ -49,6 +49,11 @@ Give your bot a name: <name>
 > If you want to buy and sell, you need two bots to run.
 
 
+## Bot storage
+
+Bots are saved as JSON files in `~/.bots/` (for example `/home/<you>/.bots/BILL.json`).  
+List bots with `Show-TraderBots`. If none exist, create one with `New-TraderBot`.
+
 ## Run your bot
 
 ```powershell

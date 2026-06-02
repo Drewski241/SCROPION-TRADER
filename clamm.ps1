@@ -1164,17 +1164,32 @@ function Import-TraderBot{
         return $bot
     }
     catch {
-        throw "Could not load bot with name $($botName)"
+        throw "Could not load bot with name $($botName): $($_.Exception.Message)"
     }
 }
 
+function Get-TraderBotDirectory{
+    return [TraderBot]::Resolve_Bot_Directory("~/.bots")
+}
+
 function Show-TraderBots{
-    $directory = "~/.bots"
-    $files = Get-ChildItem -Path $directory -Filter *.json
-    if($files.count -gt 0){
-        $files.BaseName
-    } else {
-        Write-Error "No bots found"
+    $resolvedDirectory = [TraderBot]::Resolve_Bot_Directory("~/.bots")
+    Write-Host "Bot directory: $resolvedDirectory"
+    $files = @(Get-ChildItem -Path $resolvedDirectory -Filter *.json -ErrorAction SilentlyContinue)
+    if($files.Count -eq 0){
+        Write-Host "No bots found in $resolvedDirectory"
+        return
+    }
+
+    foreach($file in $files){
+        try{
+            $data = Get-Content -Path $file.FullName -Raw | ConvertFrom-Json
+            $id = if($data.id){ [string]$data.id } else { $file.BaseName }
+            $token = if($data.token_y){ [string]$data.token_y } else { "?" }
+            Write-Host "$id  (file: $($file.Name), token_y: $token)"
+        } catch {
+            Write-Host "$($file.BaseName)  (invalid json)"
+        }
     }
 }
 
