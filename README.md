@@ -35,6 +35,7 @@ Checks TibetSwap reserves/quotes and Dexie offers, then suggests `pa`/`pb` for s
 . ./clamm.ps1
 Get-TraderBotSettingsSuggestion -TokenY "BEPE"
 Get-TraderBotSettingsSuggestion -TokenY "BEPE" -RangePercent 15 -QuoteXchAmount 0.5
+Get-TraderBotSettingsSuggestion -TokenY "BEPE" -UseTradeHistorySizing
 ```
 
 Price unit is **CAT per 1 XCH** (same as bot setup).
@@ -44,7 +45,7 @@ Price unit is **CAT per 1 XCH** (same as bot setup).
 > Keep in mind that the price is CAT/XCH = Price
 
 ```PowerShell
-$bot = New-TraderBot -UseMarketSuggestion
+$bot = New-TraderBot -UseMarketSuggestion -UseTradeHistorySizing
 Enter token_y ticker or asset_id: <token_id or ticker>
 Is the starting amount for X or Y? Enter X or Y: <X = XCH, Y = CAT>
 Enter minimum price (CAT per 1 XCH) [suggested: ..., Enter=accept]:
@@ -54,6 +55,8 @@ Give your bot a name: <name>
 ```
 
 Manual mode (no live suggestions): `New-TraderBot`
+Market-only defaults: `New-TraderBot -UseMarketSuggestion`
+Market + Dexie size-history defaults: `New-TraderBot -UseMarketSuggestion -UseTradeHistorySizing`
 
 ### INFO
 > The bots start out as one way but will trade in both directions (bid/ask)

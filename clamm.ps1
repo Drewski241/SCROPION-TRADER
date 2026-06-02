@@ -141,7 +141,7 @@ class TraderBot {
         throw "Unexpected behavior naming bot."
     }
 
-    static [TraderBot]Build([bool]$useMarketSuggestion, [decimal]$rangePercent, [decimal]$quoteXchAmount){
+    static [TraderBot]Build([bool]$useMarketSuggestion, [bool]$useTradeHistorySizing, [decimal]$rangePercent, [decimal]$quoteXchAmount){
         $bot = [TraderBot]::new()
 
         $tokenInput = ""
@@ -188,7 +188,7 @@ class TraderBot {
         if($useMarketSuggestion){
             Write-Host ""
             Write-Host "Fetching live prices from TibetSwap and Dexie..." -ForegroundColor Cyan
-            $marketSuggestion = Get-TraderBotSettingsSuggestion -TokenY $bot.token_y -RangePercent $rangePercent -QuoteXchAmount $quoteXchAmount
+            $marketSuggestion = Get-TraderBotSettingsSuggestion -TokenY $bot.token_y -RangePercent $rangePercent -QuoteXchAmount $quoteXchAmount -UseTradeHistorySizing:$useTradeHistorySizing
             $bot.default_tibet_x_amount = $quoteXchAmount
         }
 
@@ -222,11 +222,11 @@ class TraderBot {
         }
 
         if($bot.x_is_default){
-            $defaultStartingAmount = if($null -ne $marketSuggestion){ [Math]::Max($quoteXchAmount, 1) } else { 1 }
+            $defaultStartingAmount = if($null -ne $marketSuggestion){ [decimal]$marketSuggestion.suggested_start_xch } else { 1 }
             $startingPrompt = "Enter starting amount in XCH (recommend at least 1 XCH for Dexie fills)"
         } else {
             $defaultStartingAmount = if($null -ne $marketSuggestion){
-                [math]::Round($marketSuggestion.reference_price * $quoteXchAmount, 6)
+                [decimal]$marketSuggestion.suggested_start_y
             } else {
                 1
             }
@@ -1381,6 +1381,80 @@ function Get-DexieMarketPrices {
     }
 }
 
+function Get-PercentileValue {
+    param(
+        [double[]]$Values,
+        [double]$Percentile = 75
+    )
+
+    if($null -eq $Values -or $Values.Count -eq 0){
+        return $null
+    }
+    if($Percentile -lt 0 -or $Percentile -gt 100){
+        throw "Percentile must be between 0 and 100."
+    }
+
+    $sorted = @($Values | Sort-Object)
+    if($sorted.Count -eq 1){
+        return [decimal]$sorted[0]
+    }
+
+    $position = (($sorted.Count - 1) * ($Percentile / 100.0))
+    $lower = [int][Math]::Floor($position)
+    $upper = [int][Math]::Ceiling($position)
+    if($lower -eq $upper){
+        return [decimal]$sorted[$lower]
+    }
+
+    $fraction = $position - $lower
+    $interpolated = $sorted[$lower] + (($sorted[$upper] - $sorted[$lower]) * $fraction)
+    return [decimal]$interpolated
+}
+
+function Get-DexieTradeSizeHistory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TokenY,
+        [int]$PageSize = 50,
+        [double]$Percentile = 75
+    )
+
+    $baseUri = "https://dexie.space/v1/offers"
+    $buyCatUri = "${baseUri}?offered=xch&requested=$TokenY&page_size=$PageSize"
+    $sellCatUri = "${baseUri}?offered=$TokenY&requested=xch&page_size=$PageSize"
+
+    $xchSizes = @()
+    $catSizes = @()
+
+    foreach($uri in @($buyCatUri, $sellCatUri)){
+        try{
+            $response = Invoke-RestMethod -Uri $uri -Method Get
+            foreach($offer in @($response.offers)){
+                foreach($leg in @($offer.offered; $offer.requested)){
+                    foreach($asset in @($leg)){
+                        if($asset.code -eq "XCH" -or $asset.id -eq "xch"){
+                            $xchSizes += [double]$asset.amount
+                        } elseif($asset.amount -gt 0) {
+                            $catSizes += [double]$asset.amount
+                        }
+                    }
+                }
+            }
+        } catch {
+            Write-Warning "Dexie size history query failed for $uri : $($_.Exception.Message)"
+        }
+    }
+
+    return [pscustomobject]@{
+        xch_count = $xchSizes.Count
+        cat_count = $catSizes.Count
+        xch_median = [math]::Round((Get-PercentileValue -Values $xchSizes -Percentile 50), 6)
+        xch_p75 = [math]::Round((Get-PercentileValue -Values $xchSizes -Percentile $Percentile), 6)
+        cat_median = [math]::Round((Get-PercentileValue -Values $catSizes -Percentile 50), 6)
+        cat_p75 = [math]::Round((Get-PercentileValue -Values $catSizes -Percentile $Percentile), 6)
+    }
+}
+
 function Get-TibetMarketPrice {
     param(
         [Parameter(Mandatory = $true)]
@@ -1424,6 +1498,7 @@ function Get-TraderBotSettingsSuggestion {
         [string]$TokenY,
         [decimal]$RangePercent = 10,
         [decimal]$QuoteXchAmount = 0.2,
+        [switch]$UseTradeHistorySizing,
         [switch]$Quiet
     )
 
@@ -1482,6 +1557,22 @@ function Get-TraderBotSettingsSuggestion {
         throw "Suggested buy-CAT range is invalid (pa >= pb). Try a smaller RangePercent."
     }
 
+    $historySizing = $null
+    if($UseTradeHistorySizing){
+        $historySizing = Get-DexieTradeSizeHistory -TokenY $ticker
+    }
+
+    $suggestedXStart = [decimal][Math]::Max($QuoteXchAmount, 1)
+    $suggestedYStart = [decimal][Math]::Round($referencePrice * $QuoteXchAmount, 6)
+    if($null -ne $historySizing){
+        if($null -ne $historySizing.xch_p75 -and $historySizing.xch_p75 -gt 0){
+            $suggestedXStart = [decimal][Math]::Round([Math]::Max($suggestedXStart, [double]$historySizing.xch_p75), 6)
+        }
+        if($null -ne $historySizing.cat_p75 -and $historySizing.cat_p75 -gt 0){
+            $suggestedYStart = [decimal][Math]::Round([Math]::Max([double]$suggestedYStart, [double]$historySizing.cat_p75), 6)
+        }
+    }
+
     $suggestion = [pscustomobject]@{
         token_y = $ticker
         token_y_id = [string]$pair.asset_id
@@ -1491,8 +1582,11 @@ function Get-TraderBotSettingsSuggestion {
         range_percent = $RangePercent
         tibet = $tibet
         dexie = $dexie
+        dexie_history = $historySizing
         sell_xch_bot = $sellXchSuggestion
         buy_cat_bot = $buyCatSuggestion
+        suggested_start_xch = $suggestedXStart
+        suggested_start_y = $suggestedYStart
         generated_at = (Get-Date).ToString("o")
     }
 
@@ -1506,12 +1600,18 @@ function Get-TraderBotSettingsSuggestion {
         Write-Host "Sell-XCH bot (start with X):" -ForegroundColor Green
         Write-Host "  min price (pa): $($sellXchSuggestion.pa)"
         Write-Host "  max price (pb): $($sellXchSuggestion.pb)"
-        Write-Host "  suggested starting amount: $([Math]::Max($QuoteXchAmount, 1)) XCH"
+        Write-Host "  suggested starting amount: $($suggestion.suggested_start_xch) XCH"
         Write-Host ""
         Write-Host "Buy-CAT bot (start with Y):" -ForegroundColor Green
         Write-Host "  min price (pa): $($buyCatSuggestion.pa)"
         Write-Host "  max price (pb): $($buyCatSuggestion.pb)"
-        Write-Host "  suggested starting amount: $([math]::Round($referencePrice * $QuoteXchAmount, 6)) $($ticker)"
+        Write-Host "  suggested starting amount: $($suggestion.suggested_start_y) $($ticker)"
+        if($null -ne $historySizing){
+            Write-Host ""
+            Write-Host "Dexie size history (recent offers):" -ForegroundColor DarkCyan
+            Write-Host "  XCH median: $($historySizing.xch_median)  p75: $($historySizing.xch_p75)"
+            Write-Host "  $ticker median: $($historySizing.cat_median)  p75: $($historySizing.cat_p75)"
+        }
         Write-Host ""
     }
 
@@ -1542,6 +1642,7 @@ function Rebuild-TraderBot{
         [string]$TokenY,
         [decimal]$RangePercent = 10,
         [decimal]$QuoteXchAmount = 2,
+        [switch]$UseTradeHistorySizing,
         [switch]$Force
     )
 
@@ -1569,7 +1670,7 @@ function Rebuild-TraderBot{
         $script:PreferredTokenY = $TokenY
     }
     try{
-        $bot = New-TraderBot -UseMarketSuggestion -RangePercent $RangePercent -QuoteXchAmount $QuoteXchAmount
+        $bot = New-TraderBot -UseMarketSuggestion -UseTradeHistorySizing:$UseTradeHistorySizing -RangePercent $RangePercent -QuoteXchAmount $QuoteXchAmount
         return $bot
     } finally {
         $script:PreferredBotName = $null
@@ -1580,10 +1681,27 @@ function Rebuild-TraderBot{
 function New-TraderBot{
     param(
         [switch]$UseMarketSuggestion,
+        [switch]$UseTradeHistorySizing,
         [decimal]$RangePercent = 10,
         [decimal]$QuoteXchAmount = 0.2
     )
 
-    $bot = [TraderBot]::Build($UseMarketSuggestion.IsPresent, $RangePercent, $QuoteXchAmount)
+    $bot = [TraderBot]::Build($UseMarketSuggestion.IsPresent, $UseTradeHistorySizing.IsPresent, $RangePercent, $QuoteXchAmount)
+    if($UseMarketSuggestion -and $UseTradeHistorySizing){
+        try{
+            $sizing = Get-TraderBotSettingsSuggestion -TokenY $bot.token_y -RangePercent $RangePercent -QuoteXchAmount $QuoteXchAmount -UseTradeHistorySizing -Quiet
+            if($bot.x_is_default){
+                if($bot.starting_x_amount -lt $sizing.suggested_start_xch){
+                    Write-Host "Tip: recent Dexie size history suggests $($sizing.suggested_start_xch) XCH for better coverage." -ForegroundColor DarkCyan
+                }
+            } else {
+                if($bot.starting_y_amount -lt $sizing.suggested_start_y){
+                    Write-Host "Tip: recent Dexie size history suggests $($sizing.suggested_start_y) $($bot.token_y) for better coverage." -ForegroundColor DarkCyan
+                }
+            }
+        } catch {
+            Write-Warning "Trade history sizing check failed: $($_.Exception.Message)"
+        }
+    }
     return $bot
 }
