@@ -68,6 +68,17 @@ Manual mode (no live suggestions): `New-TraderBot`
 Bots are saved as JSON files in `~/.bots/` (for example `/home/<you>/.bots/BILL.json`).  
 List bots with `Show-TraderBots`. If none exist, create one with `New-TraderBot`.
 
+## Rebuild a bot
+
+Replace an existing bot file and walk through setup again (market-suggested prices, recommended **2 XCH** quote size):
+
+```powershell
+. ./clamm.ps1
+Rebuild-TraderBot -BotName "FRED" -TokenY "BYC" -Force
+```
+
+Press **Enter** at each `[suggested: ...]` prompt to accept. For Dexie fills, use **at least 1–2 XCH** as starting amount (not the CAT/XCH price).
+
 ## Run your bot
 
 ```powershell

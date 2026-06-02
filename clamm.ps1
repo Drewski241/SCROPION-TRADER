@@ -125,7 +125,14 @@ class TraderBot {
 
     static [string]Prompt_Name(){
         while($true){
-            $botid = (Read-Host "Give your bot a name")
+            $prompt = "Give your bot a name"
+            if(-not [string]::IsNullOrWhiteSpace($script:PreferredBotName)){
+                $prompt = "Give your bot a name [suggested: $($script:PreferredBotName), Enter=accept]"
+            }
+            $botid = (Read-Host $prompt)
+            if([string]::IsNullOrWhiteSpace($botid) -and -not [string]::IsNullOrWhiteSpace($script:PreferredBotName)){
+                return $script:PreferredBotName
+            }
             if($botid.Length -gt 0){
                 return $botid
             }
@@ -140,7 +147,14 @@ class TraderBot {
         $tokenInput = ""
         $pairInfo = $null
         while($true){
-            $tokenInput = (Read-Host "Enter token_y ticker or asset_id").Trim()
+            $tokenPrompt = "Enter token_y ticker or asset_id"
+            if(-not [string]::IsNullOrWhiteSpace($script:PreferredTokenY)){
+                $tokenPrompt = "Enter token_y ticker or asset_id [suggested: $($script:PreferredTokenY), Enter=accept]"
+            }
+            $tokenInput = (Read-Host $tokenPrompt).Trim()
+            if([string]::IsNullOrWhiteSpace($tokenInput) -and -not [string]::IsNullOrWhiteSpace($script:PreferredTokenY)){
+                $tokenInput = $script:PreferredTokenY
+            }
             if([string]::IsNullOrWhiteSpace($tokenInput)){
                 Write-Host "token_y is required." -ForegroundColor Yellow
                 continue
