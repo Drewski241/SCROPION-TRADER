@@ -208,8 +208,8 @@ class TraderBot {
         }
 
         if($bot.x_is_default){
-            $defaultStartingAmount = if($null -ne $marketSuggestion){ $quoteXchAmount } else { 1 }
-            $startingPrompt = "Enter starting amount in XCH"
+            $defaultStartingAmount = if($null -ne $marketSuggestion){ [Math]::Max($quoteXchAmount, 1) } else { 1 }
+            $startingPrompt = "Enter starting amount in XCH (recommend at least 1 XCH for Dexie fills)"
         } else {
             $defaultStartingAmount = if($null -ne $marketSuggestion){
                 [math]::Round($marketSuggestion.reference_price * $quoteXchAmount, 6)
@@ -504,7 +504,14 @@ class TraderBot {
             if($read.offer.maker[0].asset.asset_id -eq $this.token_y_id -AND $null -eq $read.offer.taker[0].asset.asset_id){
                 $requested_xch = $read.offer.taker[0].amount | ConvertFrom-XchMojo
                 $offered_y = $read.offer.maker[0].amount | ConvertFrom-CatMojo
-                $formula_says = $this.Adjust_X_Amount(-$requested_xch)
+                if($requested_xch -gt $this.xr){
+                    return @{ isProfitable = $false }
+                }
+                try{
+                    $formula_says = $this.Adjust_X_Amount(-$requested_xch)
+                } catch {
+                    return @{ isProfitable = $false }
+                }
                 $yprofit = ($offered_y - $formula_says.dy)
                 if($yprofit -gt 0){
                     Return @{
@@ -527,7 +534,14 @@ class TraderBot {
                 $offered_xch = $read.offer.maker[0].amount | ConvertFrom-XchMojo
                 $requested_y = $read.offer.taker[0].amount | ConvertFrom-CatMojo
 
-                $formula_says = $this.Adjust_Y_Amount(-$requested_y)
+                if($requested_y -gt $this.yr){
+                    return @{ isProfitable = $false }
+                }
+                try{
+                    $formula_says = $this.Adjust_Y_Amount(-$requested_y)
+                } catch {
+                    return @{ isProfitable = $false }
+                }
                 $xprofit = ($offered_xch - $formula_says.dx)
                 if($xprofit -gt 0) {
                     Return @{
@@ -612,7 +626,9 @@ class TraderBot {
                     profit_bps = $this.GetProfitBps($checked)
                 }
             } catch {
-                Write-Host "Skipping invalid offer during ranking: $($_.Exception.Message)" -ForegroundColor DarkYellow
+                if($_.Exception.Message -notmatch 'Insufficient (xr|yr) reserve'){
+                    Write-Host "Skipping invalid offer during ranking: $($_.Exception.Message)" -ForegroundColor DarkYellow
+                }
             }
         }
 
@@ -761,6 +777,10 @@ class TraderBot {
 
 
     [void]HandleDexieFromX(){
+        if($this.xr -le 0){
+            Write-Host "Skipping Dexie XCH-side offers: no XCH reserve (xr=$($this.xr))." -ForegroundColor DarkYellow
+            return
+        }
         $offers = $this.GetDexieFromX()
         $ranked = $this.RankDexieOffers($offers)
         if($ranked.Count -gt 0){
@@ -769,6 +789,10 @@ class TraderBot {
     }
 
     [void]HandleDexieFromY(){
+        if($this.yr -le 0){
+            Write-Host "Skipping Dexie $($this.token_y)-side offers: no $($this.token_y) reserve (yr=0). Start with Y or wait until you hold $($this.token_y)." -ForegroundColor DarkYellow
+            return
+        }
         $offers = $this.GetDexieFromY()
         $ranked = $this.RankDexieOffers($offers)
         if($ranked.Count -gt 0){
@@ -1127,25 +1151,37 @@ class TraderBot {
             throw "You must set the tibet_x_amount to be a decimal number greater than 0."
         }
         while($true){
+            $probeX = [Math]::Min(1, [decimal]$this.xr)
+            if($probeX -le 0){ $probeX = [decimal]0.01 }
             try{
-                $sell = ($this.Adjust_X_Amount(-1)).dy
+                $sell = ($this.Adjust_X_Amount(-$probeX)).dy
+                $sellLabel = "$probeX XCH"
             } catch {
                 $sell = "NA"
+                $sellLabel = "$probeX XCH"
             }
             try{
-                $buy = ($this.Adjust_X_Amount(1)).dy
+                $buy = ($this.Adjust_X_Amount($probeX)).dy
+                $buyLabel = "$probeX XCH"
             } catch {
                 $buy = "NA"
+                $buyLabel = "$probeX XCH"
             }
             
             
             Write-Host ""
             Write-Host "-------------------------------------------------" -ForegroundColor Cyan
-            Write-Host "Currently trading [ $($buy) ] $($this.token_y) for [ 1 XCH ]" -ForegroundColor Cyan
-            Write-Host "Currently trading [ 1 XCH ] for [ $($sell) $($this.token_y) ]" -ForegroundColor Cyan
+            Write-Host "Currently trading [ $($buy) ] $($this.token_y) for [ $($buyLabel) ]" -ForegroundColor Cyan
+            Write-Host "Currently trading [ $($sellLabel) ] for [ $($sell) $($this.token_y) ]" -ForegroundColor Cyan
             Write-Host ""
             Write-Host "Current XCH Balance: $($this.xr)" -ForegroundColor Cyan
             Write-Host "Current $($this.token_y) Balance: $($this.yr)"  -ForegroundColor Cyan
+            if($this.yr -le 0){
+                Write-Host "Note: yr=0 at this price — only XCH->CAT Dexie fills are possible until price moves." -ForegroundColor DarkYellow
+            }
+            if($this.xr -lt 1){
+                Write-Host "Note: xr is under 1 XCH — most Dexie offers will be skipped as too large." -ForegroundColor DarkYellow
+            }
             Write-Host "-------------------------------------------------" -ForegroundColor Cyan
             Write-Host ""
 
@@ -1456,7 +1492,7 @@ function Get-TraderBotSettingsSuggestion {
         Write-Host "Sell-XCH bot (start with X):" -ForegroundColor Green
         Write-Host "  min price (pa): $($sellXchSuggestion.pa)"
         Write-Host "  max price (pb): $($sellXchSuggestion.pb)"
-        Write-Host "  suggested starting amount: $QuoteXchAmount XCH"
+        Write-Host "  suggested starting amount: $([Math]::Max($QuoteXchAmount, 1)) XCH"
         Write-Host ""
         Write-Host "Buy-CAT bot (start with Y):" -ForegroundColor Green
         Write-Host "  min price (pa): $($buyCatSuggestion.pa)"
