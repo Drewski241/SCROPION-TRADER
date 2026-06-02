@@ -1518,6 +1518,65 @@ function Get-TraderBotSettingsSuggestion {
     return $suggestion
 }
 
+function Remove-TraderBot{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BotName,
+        [string]$Directory = "~/.bots"
+    )
+
+    $filePath = [TraderBot]::Build_Bot_File_Path($BotName, $Directory)
+    if(-not (Test-Path -Path $filePath)){
+        Write-Host "No bot file to remove: $filePath"
+        return
+    }
+
+    Remove-Item -Path $filePath -Force
+    Write-Host "Removed bot file: $filePath" -ForegroundColor Yellow
+}
+
+function Rebuild-TraderBot{
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BotName,
+        [string]$TokenY,
+        [decimal]$RangePercent = 10,
+        [decimal]$QuoteXchAmount = 2,
+        [switch]$Force
+    )
+
+    $filePath = [TraderBot]::Build_Bot_File_Path($BotName, "~/.bots")
+    if(Test-Path -Path $filePath){
+        if($Force){
+            Remove-TraderBot -BotName $BotName
+        } else {
+            $answer = (Read-Host "Delete existing bot '$BotName' at $filePath ? [y/N]").Trim()
+            if($answer -in @('y', 'Y')){
+                Remove-TraderBot -BotName $BotName
+            } else {
+                throw "Rebuild cancelled."
+            }
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Rebuilding bot '$BotName' with live market suggestions." -ForegroundColor Cyan
+    Write-Host "Tips: use X + at least 1-2 XCH starting amount for Dexie; Enter accepts suggested values." -ForegroundColor DarkCyan
+    Write-Host ""
+
+    $script:PreferredBotName = $BotName
+    if(-not [string]::IsNullOrWhiteSpace($TokenY)){
+        $script:PreferredTokenY = $TokenY
+    }
+    try{
+        $bot = New-TraderBot -UseMarketSuggestion -RangePercent $RangePercent -QuoteXchAmount $QuoteXchAmount
+        return $bot
+    } finally {
+        $script:PreferredBotName = $null
+        $script:PreferredTokenY = $null
+    }
+}
+
 function New-TraderBot{
     param(
         [switch]$UseMarketSuggestion,
