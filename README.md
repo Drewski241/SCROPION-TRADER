@@ -27,6 +27,18 @@ Use dot sourcing to import into your powershell session.
 . ./TibetTrader/clamm.ps1
 ```
 
+## Suggest bot settings from live markets
+
+Checks TibetSwap reserves/quotes and Dexie offers, then suggests `pa`/`pb` for sell-XCH and buy-CAT bots:
+
+```powershell
+. ./clamm.ps1
+Get-TraderBotSettingsSuggestion -TokenY "BEPE"
+Get-TraderBotSettingsSuggestion -TokenY "BEPE" -RangePercent 15 -QuoteXchAmount 0.5
+```
+
+Price unit is **CAT per 1 XCH** (same as bot setup).
+
 ## Build your first bot
 
 > Keep in mind that the price is CAT/XCH = Price

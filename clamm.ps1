@@ -1193,6 +1193,208 @@ function Show-TraderBots{
     }
 }
 
+function Get-CatPerXchFromDexieOffer {
+    param(
+        [Parameter(Mandatory = $true)]
+        $DexieOffer
+    )
+
+    $xchAmount = [decimal]0
+    $catAmount = [decimal]0
+    foreach($leg in @($DexieOffer.offered; $DexieOffer.requested)){
+        foreach($asset in $leg){
+            if($asset.code -eq "XCH" -or $asset.id -eq "xch"){
+                $xchAmount += [decimal]$asset.amount
+            } else {
+                $catAmount += [decimal]$asset.amount
+            }
+        }
+    }
+
+    if($xchAmount -le 0){
+        return $null
+    }
+
+    return [math]::Round($catAmount / $xchAmount, 6)
+}
+
+function Get-DexieMarketPrices {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TokenY,
+        [int]$PageSize = 5
+    )
+
+    $baseUri = "https://dexie.space/v1/offers"
+    $buyCatUri = "${baseUri}?offered=xch&requested=$TokenY&page_size=$PageSize"
+    $sellCatUri = "${baseUri}?offered=$TokenY&requested=xch&page_size=$PageSize"
+
+    $buyCatPrices = @()
+    $sellCatPrices = @()
+
+    try{
+        $buyCatResponse = Invoke-RestMethod -Uri $buyCatUri -Method Get
+        foreach($offer in @($buyCatResponse.offers)){
+            $price = Get-CatPerXchFromDexieOffer -DexieOffer $offer
+            if($null -ne $price){ $buyCatPrices += $price }
+        }
+    } catch {
+        Write-Warning "Dexie buy-cat query failed: $($_.Exception.Message)"
+    }
+
+    try{
+        $sellCatResponse = Invoke-RestMethod -Uri $sellCatUri -Method Get
+        foreach($offer in @($sellCatResponse.offers)){
+            $price = Get-CatPerXchFromDexieOffer -DexieOffer $offer
+            if($null -ne $price){ $sellCatPrices += $price }
+        }
+    } catch {
+        Write-Warning "Dexie sell-cat query failed: $($_.Exception.Message)"
+    }
+
+    return [pscustomobject]@{
+        buy_cat_prices = $buyCatPrices
+        sell_cat_prices = $sellCatPrices
+        buy_cat_best = if($buyCatPrices.Count -gt 0){ ($buyCatPrices | Measure-Object -Minimum).Minimum } else { $null }
+        sell_cat_best = if($sellCatPrices.Count -gt 0){ ($sellCatPrices | Measure-Object -Maximum).Maximum } else { $null }
+        mid_price = if(($buyCatPrices.Count -gt 0) -and ($sellCatPrices.Count -gt 0)){
+            [math]::Round((($buyCatPrices | Measure-Object -Minimum).Minimum + ($sellCatPrices | Measure-Object -Maximum).Maximum) / 2, 6)
+        } else { $null }
+    }
+}
+
+function Get-TibetMarketPrice {
+    param(
+        [Parameter(Mandatory = $true)]
+        $PairInfo,
+        [decimal]$QuoteXchAmount = 0.2
+    )
+
+    $xchReserve = [decimal]$PairInfo.xch_reserve / 1000000000000
+    $catReserve = [decimal]$PairInfo.token_reserve / 1000
+    $reservePrice = if($xchReserve -gt 0){ [math]::Round($catReserve / $xchReserve, 6) } else { $null }
+
+    $quotePrice = $null
+    if((Get-Command Get-TibetQuote -ErrorAction SilentlyContinue) -and (Get-Command ConvertTo-XchMojo -ErrorAction SilentlyContinue)){
+        try{
+            $quote = Get-TibetQuote -pair_id $PairInfo.pair_id -amount_in ($QuoteXchAmount | ConvertTo-XchMojo) -xch_is_input
+            if((Get-Command ConvertFrom-CatMojo -ErrorAction SilentlyContinue)){
+                $catOut = $quote.amount_out | ConvertFrom-CatMojo
+            } else {
+                $catOut = [decimal]$quote.amount_out / 1000
+            }
+            if($QuoteXchAmount -gt 0){
+                $quotePrice = [math]::Round($catOut / $QuoteXchAmount, 6)
+            }
+        } catch {
+            Write-Warning "Tibet quote lookup failed: $($_.Exception.Message)"
+        }
+    }
+
+    $spot = if($null -ne $quotePrice){ $quotePrice } else { $reservePrice }
+    return [pscustomobject]@{
+        reserve_price = $reservePrice
+        quote_price = $quotePrice
+        spot_price = $spot
+        quote_xch_amount = $QuoteXchAmount
+    }
+}
+
+function Get-TraderBotSettingsSuggestion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TokenY,
+        [decimal]$RangePercent = 10,
+        [decimal]$QuoteXchAmount = 0.2
+    )
+
+    if($RangePercent -le 0){
+        throw "RangePercent must be greater than 0."
+    }
+
+    $pairLookup = Get-TTPairs -asset_id $TokenY
+    $pair = if($pairLookup -is [System.Array]){ $pairLookup[0] } else { $pairLookup }
+    if(-not $pair){
+        throw "No TibetSwap pair found for token '$TokenY'."
+    }
+
+    $ticker = if(-not [string]::IsNullOrWhiteSpace([string]$pair.asset_short_name)){
+        [string]$pair.asset_short_name
+    } else {
+        $TokenY
+    }
+
+    $tibet = Get-TibetMarketPrice -PairInfo $pair -QuoteXchAmount $QuoteXchAmount
+    $dexie = Get-DexieMarketPrices -TokenY $ticker
+
+    $candidates = @()
+    if($null -ne $tibet.spot_price){ $candidates += $tibet.spot_price }
+    if($null -ne $dexie.mid_price){ $candidates += $dexie.mid_price }
+    if($null -ne $dexie.buy_cat_best){ $candidates += $dexie.buy_cat_best }
+    if($null -ne $dexie.sell_cat_best){ $candidates += $dexie.sell_cat_best }
+
+    if($candidates.Count -eq 0){
+        throw "Could not determine a market price from TibetSwap or Dexie for '$TokenY'."
+    }
+
+    $referencePrice = [math]::Round((($candidates | Measure-Object -Average).Average), 6)
+    $rangeFactor = ($RangePercent / 100)
+
+    $sellXchSuggestion = [pscustomobject]@{
+        strategy = "Start with XCH (sell XCH for CAT as price rises)"
+        x_is_default = $true
+        pa = $referencePrice
+        pb = [math]::Round($referencePrice * (1 + $rangeFactor), 6)
+        note = "Set pa near current price; pb above current."
+    }
+
+    $buyCatSuggestion = [pscustomobject]@{
+        strategy = "Start with CAT (buy CAT with XCH as price falls)"
+        x_is_default = $false
+        pa = [math]::Round($referencePrice * (1 - $rangeFactor), 6)
+        pb = $referencePrice
+        note = "Set pb near current price; pa below current."
+    }
+
+    if($sellXchSuggestion.pa -ge $sellXchSuggestion.pb){
+        throw "Suggested sell-XCH range is invalid (pa >= pb). Try a larger RangePercent."
+    }
+    if($buyCatSuggestion.pa -ge $buyCatSuggestion.pb){
+        throw "Suggested buy-CAT range is invalid (pa >= pb). Try a smaller RangePercent."
+    }
+
+    $suggestion = [pscustomobject]@{
+        token_y = $ticker
+        token_y_id = [string]$pair.asset_id
+        pair_id = [string]$pair.pair_id
+        price_unit = "CAT per 1 XCH"
+        reference_price = $referencePrice
+        range_percent = $RangePercent
+        tibet = $tibet
+        dexie = $dexie
+        sell_xch_bot = $sellXchSuggestion
+        buy_cat_bot = $buyCatSuggestion
+        generated_at = (Get-Date).ToString("o")
+    }
+
+    Write-Host ""
+    Write-Host "Settings suggestion for $($suggestion.token_y) ($($suggestion.price_unit))" -ForegroundColor Cyan
+    Write-Host "Reference price: $($suggestion.reference_price)"
+    Write-Host "Tibet reserve: $($tibet.reserve_price)  |  Tibet quote ($QuoteXchAmount XCH): $($tibet.quote_price)"
+    Write-Host "Dexie best buy-CAT: $($dexie.buy_cat_best)  |  best sell-CAT: $($dexie.sell_cat_best)  |  mid: $($dexie.mid_price)"
+    Write-Host ""
+    Write-Host "Sell-XCH bot (start with X):" -ForegroundColor Green
+    Write-Host "  min price (pa): $($sellXchSuggestion.pa)"
+    Write-Host "  max price (pb): $($sellXchSuggestion.pb)"
+    Write-Host ""
+    Write-Host "Buy-CAT bot (start with Y):" -ForegroundColor Green
+    Write-Host "  min price (pa): $($buyCatSuggestion.pa)"
+    Write-Host "  max price (pb): $($buyCatSuggestion.pb)"
+    Write-Host ""
+
+    return $suggestion
+}
+
 function New-TraderBot{
     $bot = [TraderBot]::Build()
     return $bot
