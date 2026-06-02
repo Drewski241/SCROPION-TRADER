@@ -81,6 +81,32 @@ class TraderBot {
         throw "Unexpected prompt flow while reading decimal value."
     }
 
+    static [decimal]Prompt_Positive_DecimalWithDefault([string]$promptText, [decimal]$defaultValue){
+        $hint = [math]::Round($defaultValue, 6)
+        while($true){
+            $rawValue = Read-Host "$promptText [suggested: $hint, Enter=accept]"
+            if([string]::IsNullOrWhiteSpace($rawValue)){
+                return $defaultValue
+            }
+
+            try{
+                $parsedValue = [decimal]$rawValue
+            } catch {
+                Write-Host "Please enter a valid number." -ForegroundColor Yellow
+                continue
+            }
+
+            if($parsedValue -le 0){
+                Write-Host "Please enter a value greater than 0." -ForegroundColor Yellow
+                continue
+            }
+
+            return $parsedValue
+        }
+
+        throw "Unexpected prompt flow while reading decimal value."
+    }
+
     static [bool]Prompt_X_Is_Default(){
         while($true){
             $selection = (Read-Host "Is the starting amount for X or Y? Enter X or Y").Trim().ToUpperInvariant()
@@ -108,7 +134,7 @@ class TraderBot {
         throw "Unexpected behavior naming bot."
     }
 
-    static [TraderBot]Build(){
+    static [TraderBot]Build([bool]$useMarketSuggestion, [decimal]$rangePercent, [decimal]$quoteXchAmount){
         $bot = [TraderBot]::new()
 
         $tokenInput = ""
@@ -144,9 +170,35 @@ class TraderBot {
             $bot.token_y = $tokenInput
         }
 
+        $marketSuggestion = $null
+        if($useMarketSuggestion){
+            Write-Host ""
+            Write-Host "Fetching live prices from TibetSwap and Dexie..." -ForegroundColor Cyan
+            $marketSuggestion = Get-TraderBotSettingsSuggestion -TokenY $bot.token_y -RangePercent $rangePercent -QuoteXchAmount $quoteXchAmount
+            $bot.default_tibet_x_amount = $quoteXchAmount
+        }
+
+        $bot.x_is_default = [TraderBot]::Prompt_X_Is_Default()
+
+        $priceProfile = $null
+        if($null -ne $marketSuggestion){
+            if($bot.x_is_default){
+                $priceProfile = $marketSuggestion.sell_xch_bot
+                Write-Host "Using sell-XCH profile: $($priceProfile.note)" -ForegroundColor DarkCyan
+            } else {
+                $priceProfile = $marketSuggestion.buy_cat_bot
+                Write-Host "Using buy-CAT profile: $($priceProfile.note)" -ForegroundColor DarkCyan
+            }
+        }
+
         while($true){
-            $bot.pa = [TraderBot]::Prompt_Positive_Decimal("Enter minimum price")
-            $bot.pb = [TraderBot]::Prompt_Positive_Decimal("Enter maximum price")
+            if($null -ne $priceProfile){
+                $bot.pa = [TraderBot]::Prompt_Positive_DecimalWithDefault("Enter minimum price (CAT per 1 XCH)", [decimal]$priceProfile.pa)
+                $bot.pb = [TraderBot]::Prompt_Positive_DecimalWithDefault("Enter maximum price (CAT per 1 XCH)", [decimal]$priceProfile.pb)
+            } else {
+                $bot.pa = [TraderBot]::Prompt_Positive_Decimal("Enter minimum price (CAT per 1 XCH)")
+                $bot.pb = [TraderBot]::Prompt_Positive_Decimal("Enter maximum price (CAT per 1 XCH)")
+            }
             try{
                 $bot.Validate_Price_Range()
                 break
@@ -155,8 +207,24 @@ class TraderBot {
             }
         }
 
-        $bot.x_is_default = [TraderBot]::Prompt_X_Is_Default()
-        $startingAmount = [TraderBot]::Prompt_Positive_Decimal("Enter starting amount")
+        if($bot.x_is_default){
+            $defaultStartingAmount = if($null -ne $marketSuggestion){ $quoteXchAmount } else { 1 }
+            $startingPrompt = "Enter starting amount in XCH"
+        } else {
+            $defaultStartingAmount = if($null -ne $marketSuggestion){
+                [math]::Round($marketSuggestion.reference_price * $quoteXchAmount, 6)
+            } else {
+                1
+            }
+            $startingPrompt = "Enter starting amount in $($bot.token_y) (CAT)"
+        }
+
+        if($null -ne $marketSuggestion){
+            $startingAmount = [TraderBot]::Prompt_Positive_DecimalWithDefault($startingPrompt, $defaultStartingAmount)
+        } else {
+            $startingAmount = [TraderBot]::Prompt_Positive_Decimal($startingPrompt)
+        }
+
         $bot.Starting_Token_Amount($startingAmount)
         $bot.id = [TraderBot]::Prompt_Name()
         $bot.save()
@@ -1305,7 +1373,8 @@ function Get-TraderBotSettingsSuggestion {
         [Parameter(Mandatory = $true)]
         [string]$TokenY,
         [decimal]$RangePercent = 10,
-        [decimal]$QuoteXchAmount = 0.2
+        [decimal]$QuoteXchAmount = 0.2,
+        [switch]$Quiet
     )
 
     if($RangePercent -le 0){
@@ -1377,25 +1446,35 @@ function Get-TraderBotSettingsSuggestion {
         generated_at = (Get-Date).ToString("o")
     }
 
-    Write-Host ""
-    Write-Host "Settings suggestion for $($suggestion.token_y) ($($suggestion.price_unit))" -ForegroundColor Cyan
-    Write-Host "Reference price: $($suggestion.reference_price)"
-    Write-Host "Tibet reserve: $($tibet.reserve_price)  |  Tibet quote ($QuoteXchAmount XCH): $($tibet.quote_price)"
-    Write-Host "Dexie best buy-CAT: $($dexie.buy_cat_best)  |  best sell-CAT: $($dexie.sell_cat_best)  |  mid: $($dexie.mid_price)"
-    Write-Host ""
-    Write-Host "Sell-XCH bot (start with X):" -ForegroundColor Green
-    Write-Host "  min price (pa): $($sellXchSuggestion.pa)"
-    Write-Host "  max price (pb): $($sellXchSuggestion.pb)"
-    Write-Host ""
-    Write-Host "Buy-CAT bot (start with Y):" -ForegroundColor Green
-    Write-Host "  min price (pa): $($buyCatSuggestion.pa)"
-    Write-Host "  max price (pb): $($buyCatSuggestion.pb)"
-    Write-Host ""
+    if(-not $Quiet){
+        Write-Host ""
+        Write-Host "Settings suggestion for $($suggestion.token_y) ($($suggestion.price_unit))" -ForegroundColor Cyan
+        Write-Host "Reference price: $($suggestion.reference_price)"
+        Write-Host "Tibet reserve: $($tibet.reserve_price)  |  Tibet quote ($QuoteXchAmount XCH): $($tibet.quote_price)"
+        Write-Host "Dexie best buy-CAT: $($dexie.buy_cat_best)  |  best sell-CAT: $($dexie.sell_cat_best)  |  mid: $($dexie.mid_price)"
+        Write-Host ""
+        Write-Host "Sell-XCH bot (start with X):" -ForegroundColor Green
+        Write-Host "  min price (pa): $($sellXchSuggestion.pa)"
+        Write-Host "  max price (pb): $($sellXchSuggestion.pb)"
+        Write-Host "  suggested starting amount: $QuoteXchAmount XCH"
+        Write-Host ""
+        Write-Host "Buy-CAT bot (start with Y):" -ForegroundColor Green
+        Write-Host "  min price (pa): $($buyCatSuggestion.pa)"
+        Write-Host "  max price (pb): $($buyCatSuggestion.pb)"
+        Write-Host "  suggested starting amount: $([math]::Round($referencePrice * $QuoteXchAmount, 6)) $($ticker)"
+        Write-Host ""
+    }
 
     return $suggestion
 }
 
 function New-TraderBot{
-    $bot = [TraderBot]::Build()
+    param(
+        [switch]$UseMarketSuggestion,
+        [decimal]$RangePercent = 10,
+        [decimal]$QuoteXchAmount = 0.2
+    )
+
+    $bot = [TraderBot]::Build($UseMarketSuggestion.IsPresent, $RangePercent, $QuoteXchAmount)
     return $bot
 }

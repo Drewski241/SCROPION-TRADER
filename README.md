@@ -44,14 +44,16 @@ Price unit is **CAT per 1 XCH** (same as bot setup).
 > Keep in mind that the price is CAT/XCH = Price
 
 ```PowerShell
-$bot = New-TraderBot
+$bot = New-TraderBot -UseMarketSuggestion
 Enter token_y ticker or asset_id: <token_id or ticker>
-Enter minimum price: <min price>
-Enter maximum price: <max price>
 Is the starting amount for X or Y? Enter X or Y: <X = XCH, Y = CAT>
-Enter starting amount: <enter your starting amount>
+Enter minimum price (CAT per 1 XCH) [suggested: ..., Enter=accept]:
+Enter maximum price (CAT per 1 XCH) [suggested: ..., Enter=accept]:
+Enter starting amount in XCH or CAT [suggested: ..., Enter=accept]:
 Give your bot a name: <name>
 ```
+
+Manual mode (no live suggestions): `New-TraderBot`
 
 ### INFO
 > The bots start out as one way but will trade in both directions (bid/ask)
