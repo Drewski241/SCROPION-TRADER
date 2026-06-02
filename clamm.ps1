@@ -488,10 +488,20 @@ class TraderBot {
 
     [bool]MeetsProfitThresholds([hashtable]$checked_offer){
         $profitBps = $this.GetProfitBps($checked_offer)
-        $enoughX = ([decimal]$checked_offer.xProfit -ge $this.min_profit_x)
-        $enoughY = ([decimal]$checked_offer.yProfit -ge $this.min_profit_y)
-        $enoughBps = ($profitBps -ge $this.min_profit_bps)
-        return (($enoughX -or $enoughY) -and $enoughBps)
+        $xProfit = [decimal]$checked_offer.xProfit
+        $yProfit = [decimal]$checked_offer.yProfit
+
+        if($xProfit -le 0 -and $yProfit -le 0){
+            return $false
+        }
+        if($yProfit -gt 0 -and $yProfit -lt $this.min_profit_y){
+            return $false
+        }
+        if($xProfit -gt 0 -and $xProfit -lt $this.min_profit_x){
+            return $false
+        }
+
+        return ($profitBps -ge $this.min_profit_bps)
     }
 
     [array]RankDexieOffers([array]$offers){
