@@ -1,0 +1,16 @@
+FROM node:22-alpine AS base
+RUN corepack enable
+WORKDIR /app
+
+COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages ./packages
+COPY services/api ./services/api
+
+RUN pnpm install --frozen-lockfile=false
+RUN pnpm --filter @chia-poker/shared build \
+ && pnpm --filter @chia-poker/game-engine build \
+ && pnpm --filter @chia-poker/chia-bridge build \
+ && pnpm --filter @chia-poker/api build
+
+EXPOSE 4000
+CMD ["pnpm", "--filter", "@chia-poker/api", "start"]

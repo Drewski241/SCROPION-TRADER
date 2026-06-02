@@ -1,3 +1,16 @@
+## Chia Poker Platform (new)
+
+A global-scale poker platform scaffold lives in [`chia-poker/`](./chia-poker/). It includes:
+
+- NLHE game engine with commit-reveal shuffle
+- Chia Gaming (`chia-gaming`) integration adapter
+- REST API + WebSocket gateway
+- Architecture, scaling, and security documentation
+
+See [chia-poker/README.md](./chia-poker/README.md) to get started.
+
+---
+
 ## Concentrated Liquidity AMM (taker bot)
 Maybe not the best name for this bot, but it's what got published.  This code isn't finished or polished.
 Use at your own risk.  
